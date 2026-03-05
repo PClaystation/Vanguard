@@ -27,9 +27,10 @@ try:
 except ValueError:
     MC_DEFAULT_PORT = 25565
 
-SETTINGS_FILE = "settings.json"
-REMINDERS_FILE = "reminders.json"
-MOD_LOG_FILE = "modlog.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
+REMINDERS_FILE = os.path.join(BASE_DIR, "reminders.json")
+MOD_LOG_FILE = os.path.join(BASE_DIR, "modlog.json")
 START_TIME = datetime.now(timezone.utc)
 REMINDER_CHECK_SECONDS = 15
 MAX_REMINDER_SECONDS = 60 * 60 * 24 * 30
@@ -45,14 +46,7 @@ TOS_URL = os.getenv("TERMS_OF_SERVICE_URL", "").strip()
 ID_RE = re.compile(r"(\d{17,20})")
 DURATION_TOKEN_RE = re.compile(r"(\d+)([smhdw])")
 
-ConfigChannelInput = (
-    discord.TextChannel
-    | discord.VoiceChannel
-    | discord.StageChannel
-    | discord.CategoryChannel
-    | discord.ForumChannel
-    | discord.Thread
-)
+ConfigChannelInput = discord.abc.GuildChannel | discord.Thread
 
 
 def default_guild_settings() -> dict[str, Any]:
@@ -476,6 +470,15 @@ def ensure_text_channel(channel: ConfigChannelInput | None) -> discord.TextChann
     if isinstance(channel, discord.TextChannel):
         return channel
     return None
+
+
+def is_channel_transform_error(error: Exception) -> bool:
+    if not isinstance(error, app_commands.TransformerError):
+        return False
+    option_type = getattr(error, "type", None)
+    option_enum = getattr(discord, "AppCommandOptionType", None)
+    channel_option_type = getattr(option_enum, "channel", None) if option_enum is not None else None
+    return option_type == channel_option_type
 
 
 def has_elevated_permissions(perms: discord.Permissions | None) -> bool:
@@ -1009,11 +1012,14 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
         missing = ", ".join(err.missing_permissions)
         await ctx.send(f"⛔ I am missing permissions: `{missing}`.")
         return
+    if isinstance(err, commands.CheckFailure):
+        await ctx.send("⛔ You do not have permission to run this command.")
+        return
     if isinstance(err, commands.CommandOnCooldown):
         await ctx.send(f"⏳ Slow down. Try again in `{err.retry_after:.1f}` seconds.")
         return
     if isinstance(err, app_commands.TransformerError):
-        if err.type is app_commands.AppCommandOptionType.channel:
+        if is_channel_transform_error(err):
             await ctx.send("⚠️ Invalid channel type for that option. Choose a normal text channel.")
         else:
             await ctx.send("⚠️ Invalid argument. Check the command format and try again.")
@@ -1056,7 +1062,10 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     elif isinstance(error, app_commands.CheckFailure):
         message = "⛔ You do not have permission to run this command."
     elif isinstance(error, app_commands.TransformerError):
-        message = "⚠️ Invalid argument. Check the command format and try again."
+        if is_channel_transform_error(error):
+            message = "⚠️ Invalid channel type for that option. Choose a normal text channel."
+        else:
+            message = "⚠️ Invalid argument. Check the command format and try again."
     elif isinstance(err, commands.NotOwner):
         message = "⛔ This command is owner-only."
 
@@ -1281,7 +1290,7 @@ async def ops(ctx: commands.Context):
         return
     guild, guild_cfg = result
     now = datetime.now(timezone.utc)
-    active_votes = sum(1 for vote_id in vote_store if vote_id.startswith(f"{guild.id}-"))
+    active_votes = sum(1 for vote_id in vote_store if str(vote_id).startswith(f"{guild.id}-"))
     pending_reminders = sum(
         1
         for reminder in reminders
@@ -2343,7 +2352,7 @@ async def voteinfo(ctx: commands.Context, vote_id: str):
         return
     guild, _ = result
 
-    if not vote_id.startswith(f"{guild.id}-"):
+    if not str(vote_id).startswith(f"{guild.id}-"):
         await ctx.send("❌ This vote ID does not belong to this server.")
         return
 
@@ -2375,7 +2384,7 @@ async def activevotes(ctx: commands.Context):
     active = [
         (vote_id, vote)
         for vote_id, vote in vote_store.items()
-        if vote_id.startswith(f"{guild.id}-")
+        if str(vote_id).startswith(f"{guild.id}-")
     ]
     if not active:
         await ctx.send("No active votes in this server.")

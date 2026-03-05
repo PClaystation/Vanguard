@@ -6,7 +6,8 @@ import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 
-DATA_FILE = 'votes.json'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_FILE = os.path.join(BASE_DIR, 'votes.json')
 ACTIVE_VIEWS = {}  # vote_id -> VoteView instance (for cancelling countdowns)
 
 def _as_int(value, default=None):
