@@ -46,6 +46,9 @@ TOS_URL = os.getenv("TERMS_OF_SERVICE_URL", "").strip()
 ID_RE = re.compile(r"(\d{17,20})")
 DURATION_TOKEN_RE = re.compile(r"(\d+)([smhdw])")
 
+AppCommandChannelType = getattr(app_commands, "AppCommandChannel", discord.TextChannel)
+AppCommandThreadType = getattr(app_commands, "AppCommandThread", discord.Thread)
+
 ConfigChannelInput = (
     discord.TextChannel
     | discord.VoiceChannel
@@ -53,6 +56,8 @@ ConfigChannelInput = (
     | discord.CategoryChannel
     | discord.ForumChannel
     | discord.Thread
+    | AppCommandChannelType
+    | AppCommandThreadType
 )
 
 
@@ -471,12 +476,35 @@ def resolve_default_role(guild: discord.Guild) -> discord.Role | None:
     return guild.get_role(guild.id)
 
 
-def ensure_text_channel(channel: ConfigChannelInput | None) -> discord.TextChannel | None:
+def ensure_text_channel(channel: ConfigChannelInput | None) -> ConfigChannelInput | None:
     if channel is None:
         return None
     if isinstance(channel, discord.TextChannel):
         return channel
+    channel_type = getattr(channel, "type", None)
+    channel_type_name = str(getattr(channel_type, "name", channel_type)).lower()
+    channel_id = as_int(getattr(channel, "id", None))
+    if channel_id is not None and channel_type_name in {"text", "news"}:
+        return channel
     return None
+
+
+def get_channel_id(channel: ConfigChannelInput | None) -> int | None:
+    if channel is None:
+        return None
+    return as_int(getattr(channel, "id", None))
+
+
+def format_channel_mention(channel: ConfigChannelInput | None) -> str:
+    if channel is None:
+        return "#unknown"
+    mention = getattr(channel, "mention", None)
+    if isinstance(mention, str) and mention:
+        return mention
+    channel_id = get_channel_id(channel)
+    if channel_id is not None:
+        return f"<#{channel_id}>"
+    return "#unknown"
 
 
 def is_channel_transform_error(error: Exception) -> bool:
@@ -1187,14 +1215,28 @@ async def setup_command(
         await ctx.send("⚠️ `ops_channel` must be a text channel.")
         return
 
+    welcome_channel_id_input = get_channel_id(normalized_welcome_channel)
+    log_channel_id_input = get_channel_id(normalized_log_channel)
+    ops_channel_id_input = get_channel_id(normalized_ops_channel)
+
+    if welcome_channel is not None and welcome_channel_id_input is None:
+        await ctx.send("⚠️ Could not resolve `welcome_channel` ID.")
+        return
+    if log_channel is not None and log_channel_id_input is None:
+        await ctx.send("⚠️ Could not resolve `log_channel` ID.")
+        return
+    if ops_channel is not None and ops_channel_id_input is None:
+        await ctx.send("⚠️ Could not resolve `ops_channel` ID.")
+        return
+
     if normalized_welcome_channel:
-        guild_cfg["welcome_channel_id"] = normalized_welcome_channel.id
+        guild_cfg["welcome_channel_id"] = welcome_channel_id_input
     if welcome_role:
         guild_cfg["welcome_role_id"] = welcome_role.id
     if normalized_log_channel:
-        guild_cfg["log_channel_id"] = normalized_log_channel.id
+        guild_cfg["log_channel_id"] = log_channel_id_input
     if normalized_ops_channel:
-        guild_cfg["ops_channel_id"] = normalized_ops_channel.id
+        guild_cfg["ops_channel_id"] = ops_channel_id_input
     if guild_cfg.get("lockdown_role_id") is None:
         default_role = resolve_default_role(guild)
         if default_role is not None:
@@ -1226,10 +1268,14 @@ async def setlogchannel(ctx: commands.Context, channel: ConfigChannelInput | Non
     if channel is not None and normalized_channel is None:
         await ctx.send("⚠️ `channel` must be a text channel.")
         return
-    guild_cfg["log_channel_id"] = normalized_channel.id if normalized_channel else None
+    channel_id = get_channel_id(normalized_channel)
+    if channel is not None and channel_id is None:
+        await ctx.send("⚠️ Could not resolve channel ID.")
+        return
+    guild_cfg["log_channel_id"] = channel_id if normalized_channel else None
     save_settings()
     await ctx.send(
-        f"✅ Log channel set to {normalized_channel.mention}."
+        f"✅ Log channel set to {format_channel_mention(normalized_channel)}."
         if normalized_channel
         else "✅ Log channel cleared."
     )
@@ -1246,10 +1292,14 @@ async def setopschannel(ctx: commands.Context, channel: ConfigChannelInput | Non
     if channel is not None and normalized_channel is None:
         await ctx.send("⚠️ `channel` must be a text channel.")
         return
-    guild_cfg["ops_channel_id"] = normalized_channel.id if normalized_channel else None
+    channel_id = get_channel_id(normalized_channel)
+    if channel is not None and channel_id is None:
+        await ctx.send("⚠️ Could not resolve channel ID.")
+        return
+    guild_cfg["ops_channel_id"] = channel_id if normalized_channel else None
     save_settings()
     await ctx.send(
-        f"✅ Ops channel set to {normalized_channel.mention}."
+        f"✅ Ops channel set to {format_channel_mention(normalized_channel)}."
         if normalized_channel
         else "✅ Ops channel cleared."
     )
@@ -2159,10 +2209,14 @@ async def setwelcomechannel(ctx: commands.Context, channel: ConfigChannelInput |
     if channel is not None and normalized_channel is None:
         await ctx.send("⚠️ `channel` must be a text channel.")
         return
-    guild_cfg["welcome_channel_id"] = normalized_channel.id if normalized_channel else None
+    channel_id = get_channel_id(normalized_channel)
+    if channel is not None and channel_id is None:
+        await ctx.send("⚠️ Could not resolve channel ID.")
+        return
+    guild_cfg["welcome_channel_id"] = channel_id if normalized_channel else None
     save_settings()
     if normalized_channel:
-        await ctx.send(f"✅ Welcome channel set to {normalized_channel.mention}.")
+        await ctx.send(f"✅ Welcome channel set to {format_channel_mention(normalized_channel)}.")
     else:
         await ctx.send("✅ Welcome channel cleared. System/default channel fallback will be used.")
 
