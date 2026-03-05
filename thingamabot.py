@@ -777,14 +777,14 @@ async def on_ready():
     except Exception as exc:
         print(f"[SYNC] Global slash command sync failed: {exc}")
 
-    # Also sync to each guild for immediate command availability (no global propagation delay).
+    # Clear stale guild-scoped copies to avoid duplicate commands (global + guild).
     for guild in bot.guilds:
         try:
-            bot.tree.copy_global_to(guild=guild)
-            synced_guild = await bot.tree.sync(guild=guild)
-            print(f"[SYNC] Guild {guild.id} synced {len(synced_guild)} command(s)")
+            bot.tree.clear_commands(guild=guild)
+            await bot.tree.sync(guild=guild)
+            print(f"[SYNC] Guild {guild.id} cleared stale guild-scoped commands")
         except Exception as exc:
-            print(f"[SYNC] Guild {guild.id} sync failed: {exc}")
+            print(f"[SYNC] Guild {guild.id} clear failed: {exc}")
 
     if reminder_loop_task is None or reminder_loop_task.done():
         reminder_loop_task = asyncio.create_task(reminder_worker())
