@@ -455,12 +455,30 @@ def resolve_role(guild: discord.Guild, role_id: int | None) -> discord.Role | No
     return guild.get_role(role_id)
 
 
-def has_mod_access(member: discord.Member, guild_cfg: dict[str, Any]) -> bool:
+def has_elevated_permissions(perms: discord.Permissions | None) -> bool:
+    if perms is None:
+        return False
+    return bool(
+        perms.administrator
+        or perms.manage_guild
+        or perms.moderate_members
+        or perms.manage_roles
+    )
+
+
+def has_mod_access(
+    member: discord.Member,
+    guild_cfg: dict[str, Any],
+    interaction_perms: discord.Permissions | None = None,
+) -> bool:
     if member.guild.owner_id == member.id:
         return True
 
+    if has_elevated_permissions(interaction_perms):
+        return True
+
     perms = member.guild_permissions
-    if perms.administrator or perms.manage_guild:
+    if has_elevated_permissions(perms):
         return True
 
     mod_role_ids = set(guild_cfg.get("mod_role_ids", []))
@@ -658,12 +676,22 @@ async def require_mod_context(
         return None
 
     guild, guild_cfg = result
+    interaction_perms: discord.Permissions | None = None
+    if ctx.interaction is not None:
+        interaction_perms = ctx.interaction.permissions
+
     member = await resolve_context_member(ctx, guild)
+    if member is None and has_elevated_permissions(interaction_perms):
+        return guild, guild_cfg
     if member is None:
         await ctx.send("⚠️ Unable to verify your server membership. Try again in this server.")
         return None
-    if not has_mod_access(member, guild_cfg):
-        await ctx.send("⛔ You do not have permission to run this command.")
+    if not has_mod_access(member, guild_cfg, interaction_perms):
+        await ctx.send(
+            "⛔ You do not have permission to run this command. "
+            "Required: Server Owner, Administrator, Manage Server, Manage Roles, "
+            "Moderate Members, or a configured mod role."
+        )
         return None
     return guild, guild_cfg
 
@@ -2011,8 +2039,15 @@ async def prefix_command(ctx: commands.Context, new_prefix: str | None = None):
         await ctx.send(f"Current prefix for this server is `{current_prefix}`.")
         return
 
+    interaction_perms: discord.Permissions | None = None
+    if ctx.interaction is not None:
+        interaction_perms = ctx.interaction.permissions
     member = await resolve_context_member(ctx, ctx.guild)
-    if member is None or not has_mod_access(member, guild_cfg):
+    if member is None and has_elevated_permissions(interaction_perms):
+        member_ok = True
+    else:
+        member_ok = bool(member and has_mod_access(member, guild_cfg, interaction_perms))
+    if not member_ok:
         await ctx.send("⛔ You do not have permission to change the prefix.")
         return
 
