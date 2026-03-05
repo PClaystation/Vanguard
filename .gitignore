@@ -1,4 +1,28 @@
-
-# secrets
+# Secrets
 .env
 .env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+ENV/
+env/
+
+# OS/editor
+.DS_Store
+
+# Runtime state
+data/*.json
+!data/.gitkeep
+tmp/
+output/

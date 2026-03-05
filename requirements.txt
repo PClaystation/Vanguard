@@ -1,0 +1,6 @@
+discord.py==2.6.3
+mcstatus==12.0.5
+python-dotenv==1.0.1
+requests==2.32.5
+pytest==8.3.4
+ruff==0.6.9

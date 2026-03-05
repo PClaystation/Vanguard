@@ -6,8 +6,9 @@ import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_FILE = os.path.join(BASE_DIR, 'votes.json')
+from data_paths import resolve_data_file
+
+DATA_FILE = resolve_data_file("votes.json")
 ACTIVE_VIEWS = {}  # vote_id -> VoteView instance (for cancelling countdowns)
 
 def _as_int(value, default=None):
@@ -18,6 +19,7 @@ def _as_int(value, default=None):
 
 
 def _write_votes_atomic(payload):
+    os.makedirs(os.path.dirname(DATA_FILE), exist_ok=True)
     temp_path = f"{DATA_FILE}.tmp"
     with open(temp_path, 'w', encoding='utf-8') as f:
         json.dump(payload, f, indent=2, ensure_ascii=False)

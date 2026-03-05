@@ -13,8 +13,16 @@ from discord import app_commands
 from discord.ext import commands
 from mcstatus import JavaServer
 import requests
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv() -> bool:
+        return False
 
+from data_paths import resolve_data_file
 from vote import restore_vote_state, setup_vote_module, votes as vote_store
+
+load_dotenv()
 
 BOT_PREFIX = os.getenv("BOT_PREFIX", "!")
 MAX_PREFIX_LENGTH = 5
@@ -27,10 +35,9 @@ try:
 except ValueError:
     MC_DEFAULT_PORT = 25565
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-SETTINGS_FILE = os.path.join(BASE_DIR, "settings.json")
-REMINDERS_FILE = os.path.join(BASE_DIR, "reminders.json")
-MOD_LOG_FILE = os.path.join(BASE_DIR, "modlog.json")
+SETTINGS_FILE = resolve_data_file("settings.json")
+REMINDERS_FILE = resolve_data_file("reminders.json")
+MOD_LOG_FILE = resolve_data_file("modlog.json")
 START_TIME = datetime.now(timezone.utc)
 REMINDER_CHECK_SECONDS = 15
 MAX_REMINDER_SECONDS = 60 * 60 * 24 * 30
@@ -105,6 +112,7 @@ def clamp_text(value: Any, limit: int) -> str:
 
 
 def write_json_atomic(path: str, payload: Any) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     temp_path = f"{path}.tmp"
     with open(temp_path, "w", encoding="utf-8") as file:
         json.dump(payload, file, indent=2, ensure_ascii=False)
@@ -2506,8 +2514,9 @@ async def activevotes(ctx: commands.Context):
     await send_chunked_message(ctx, "**Active votes:**\n" + "\n\n".join(lines))
 
 
-DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
-if not DISCORD_TOKEN:
-    raise RuntimeError("Missing DISCORD_BOT_TOKEN environment variable.")
+if __name__ == "__main__":
+    DISCORD_TOKEN = os.getenv("DISCORD_BOT_TOKEN")
+    if not DISCORD_TOKEN:
+        raise RuntimeError("Missing DISCORD_BOT_TOKEN environment variable.")
 
-bot.run(DISCORD_TOKEN)
+    bot.run(DISCORD_TOKEN)

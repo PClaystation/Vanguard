@@ -1,0 +1,81 @@
+# Vanguard
+
+Discord moderation + utility bot with hybrid commands (slash + prefix), reminders, incident guardrails, and vote workflows.
+
+## What It Includes
+
+- Moderation commands: lockdown, timeout, warn, purge, undo/cases
+- Community commands: reminders, poll/choose/roll, server/user info
+- Ops features: health check, guard mode, vote tracking, AI relay command
+- Policy commands: privacy, terms, data summary
+
+## Requirements
+
+- Python 3.12+
+- A Discord bot token
+
+## Quick Start
+
+1. Install dependencies:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+2. Configure environment:
+
+```bash
+cp .env.example .env
+# fill in DISCORD_BOT_TOKEN and optional vars
+```
+
+3. Run the bot:
+
+```bash
+python3 thingamabot.py
+```
+
+## Configuration
+
+Environment variables are read from `.env` (via `python-dotenv`) or your shell.
+
+- `DISCORD_BOT_TOKEN` (required)
+- `BOT_PREFIX` (default: `!`)
+- `AI_SERVER_URL` (default: `http://localhost:3001/ask`)
+- `FLAG_USER_URL` (default: `http://localhost:3001/fuck`)
+- `UNFLAG_USER_URL` (default: `http://localhost:3001/unfuck`)
+- `MC_DEFAULT_HOST` (optional)
+- `MC_DEFAULT_PORT` (default: `25565`)
+- `PRIVACY_POLICY_URL` (optional)
+- `TERMS_OF_SERVICE_URL` (optional)
+- `VANGUARD_DATA_DIR` (default: `./data`)
+
+## Data Storage
+
+Runtime JSON state is stored in `data/`:
+
+- `data/settings.json`
+- `data/reminders.json`
+- `data/modlog.json`
+- `data/votes.json`
+
+On startup, legacy root files are migrated into `data/` automatically when possible.
+
+## Testing and Linting
+
+```bash
+ruff check .
+pytest -q
+python3 -m py_compile thingamabot.py vote.py data_paths.py
+```
+
+## CI
+
+GitHub Actions runs compile checks, Ruff, and Pytest on push/PR.
+
+## Project Notes
+
+- `thingamabot.py` is the active Python bot entrypoint.
+- Legacy Node implementation was archived to `archive/legacy/thingamabot.js` to avoid split maintenance.
