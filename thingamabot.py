@@ -668,7 +668,7 @@ async def send_backend_user_update(
 ) -> None:
     user_id = extract_id(target)
     if not user_id:
-        await ctx.send("⚠️ Provide a mention (`@user`) or the raw numeric ID.")
+        await safe_ctx_send(ctx, "⚠️ Provide a mention (`@user`) or the raw numeric ID.")
         return
 
     payload = {"userId": user_id}
@@ -680,12 +680,13 @@ async def send_backend_user_update(
             timeout=6,
         )
     except requests.exceptions.RequestException as exc:
-        await ctx.send(f"❌ Request error: `{exc}`.")
+        await safe_ctx_send(ctx, f"❌ Request error: `{exc}`.")
         return
 
     if response.status_code != 200:
         response_excerpt = clamp_text(response.text, 800)
-        await ctx.send(
+        await safe_ctx_send(
+            ctx,
             f"⚠️ Request failed for <@{user_id}>. "
             f"Status: {response.status_code}. Response: ```{response_excerpt}```"
         )
@@ -705,14 +706,14 @@ async def send_backend_user_update(
     except Exception:
         backend_msg = clamp_text(response.text, 800)
 
-    await ctx.send(f"✅ {mention} {success_text}. `{backend_msg}`")
+    await safe_ctx_send(ctx, f"✅ {mention} {success_text}. `{backend_msg}`")
 
 
 async def require_guild_context(
     ctx: commands.Context,
 ) -> tuple[discord.Guild, dict[str, Any]] | None:
     if ctx.guild is None:
-        await ctx.send("⚠️ This command can only be used in a server.")
+        await safe_ctx_send(ctx, "⚠️ This command can only be used in a server.")
         return None
     return ctx.guild, get_guild_config(ctx.guild.id)
 
@@ -748,10 +749,11 @@ async def require_mod_context(
     if member is None and has_elevated_permissions(interaction_perms):
         return guild, guild_cfg
     if member is None:
-        await ctx.send("⚠️ Unable to verify your server membership. Try again in this server.")
+        await safe_ctx_send(ctx, "⚠️ Unable to verify your server membership. Try again in this server.")
         return None
     if not has_mod_access(member, guild_cfg, interaction_perms):
-        await ctx.send(
+        await safe_ctx_send(
+            ctx,
             "⛔ You do not have permission to run this command. "
             "Required: Server Owner, Administrator, Manage Server, Manage Roles, "
             "Moderate Members, or a configured mod role."
@@ -761,11 +763,7 @@ async def require_mod_context(
 
 
 async def set_lockdown_state(ctx: commands.Context, locked: bool) -> None:
-    if ctx.interaction is not None and not ctx.interaction.response.is_done():
-        try:
-            await ctx.defer()
-        except Exception:
-            pass
+    await safe_ctx_defer(ctx)
 
     result = await require_mod_context(ctx)
     if not result:
@@ -775,7 +773,7 @@ async def set_lockdown_state(ctx: commands.Context, locked: bool) -> None:
     target_role_id = guild_cfg.get("lockdown_role_id")
     target_role = resolve_role(guild, target_role_id) if target_role_id else resolve_default_role(guild)
     if target_role is None:
-        await ctx.send("⚠️ Configured lockdown role no longer exists. Set it again with `/setlockdownrole`.")
+        await safe_ctx_send(ctx, "⚠️ Configured lockdown role no longer exists. Set it again with `/setlockdownrole`.")
         return
 
     updated = 0
@@ -867,10 +865,21 @@ async def dispatch_due_reminders() -> None:
 async def send_chunked_message(ctx: commands.Context, text: str, chunk_size: int = MAX_DISCORD_MESSAGE_CHARS) -> None:
     payload = str(text)
     if len(payload) <= chunk_size:
-        await ctx.send(payload)
+        await safe_ctx_send(ctx, payload)
         return
     for index in range(0, len(payload), chunk_size):
-        await ctx.send(payload[index : index + chunk_size])
+        await safe_ctx_send(ctx, payload[index : index + chunk_size])
+
+
+async def safe_ctx_defer(ctx: commands.Context, *, ephemeral: bool = False) -> bool:
+    interaction = getattr(ctx, "interaction", None)
+    if interaction is None or interaction.response.is_done():
+        return False
+    try:
+        await interaction.response.defer(ephemeral=ephemeral)
+        return True
+    except (discord.NotFound, discord.HTTPException):
+        return False
 
 
 async def safe_ctx_send(ctx: commands.Context, *args: Any, **kwargs: Any):
@@ -1135,6 +1144,13 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             await interaction.followup.send(message, ephemeral=True)
         else:
             await interaction.response.send_message(message, ephemeral=True)
+    except discord.NotFound:
+        channel = interaction.channel
+        if channel and hasattr(channel, "send"):
+            try:
+                await channel.send(message)
+            except Exception:
+                pass
     except Exception:
         print("[ERROR] Unhandled app command error:")
         traceback.print_exception(type(error), error, error.__traceback__)
