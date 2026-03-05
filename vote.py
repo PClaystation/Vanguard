@@ -10,14 +10,52 @@ DATA_FILE = 'votes.json'
 ACTIVE_VIEWS = {}  # vote_id -> VoteView instance (for cancelling countdowns)
 
 if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, 'r') as f:
-        votes = json.load(f)
+    try:
+        with open(DATA_FILE, 'r') as f:
+            votes = json.load(f)
+        if not isinstance(votes, dict):
+            votes = {}
+    except (json.JSONDecodeError, OSError):
+        votes = {}
 else:
     votes = {}
 
 def save_votes():
     with open(DATA_FILE, 'w') as f:
         json.dump(votes, f, indent=2)
+
+
+def _parse_datetime_utc(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _get_vote_finish_time(vote_id, vote):
+    finish_time = _parse_datetime_utc(vote.get("finish_at"))
+    if finish_time:
+        return finish_time
+
+    # Backwards compatibility for older saved votes that did not include finish metadata.
+    duration_hours = vote.get("duration_hours", 24)
+    try:
+        duration_hours = int(duration_hours)
+    except (TypeError, ValueError):
+        duration_hours = 24
+    if duration_hours < 1:
+        duration_hours = 1
+
+    try:
+        started_ts = int(vote_id.rsplit("-", 1)[-1])
+    except (TypeError, ValueError):
+        return None
+    return datetime.fromtimestamp(started_ts, tz=timezone.utc) + timedelta(hours=duration_hours)
 
 class VoteView(discord.ui.View):
     def __init__(self, vote_id, finish_time, bot):
@@ -60,9 +98,6 @@ class VoteView(discord.ui.View):
         votes[self.vote_id] = vote
         save_votes()
 
-        # Update embed counts immediately
-        await self.update_message(interaction.channel, vote)
-
         # Ephemeral confirmation
         if not prev:
             await interaction.response.send_message(f"✅ Your vote ({choice}) has been recorded.", ephemeral=True)
@@ -71,7 +106,14 @@ class VoteView(discord.ui.View):
         else:
             await interaction.response.send_message(f"🔁 Changed vote from {prev} to {choice}.", ephemeral=True)
 
+        # Update embed counts immediately
+        channel = interaction.channel or self.bot.get_channel(vote["channel_id"])
+        if channel:
+            await self.update_message(channel, vote)
+
     async def update_message(self, channel, vote):
+        if channel is None:
+            return
         try:
             msg = await channel.fetch_message(vote["message_id"])
         except Exception:
@@ -130,13 +172,25 @@ class VoteView(discord.ui.View):
         except asyncio.CancelledError:
             pass
 
-    async def stop(self):
+    async def stop_updater(self):
         self._stopped = True
         try:
             if self.update_task:
                 self.update_task.cancel()
         except Exception:
             pass
+        super().stop()
+
+
+def _safe_channel_slug(name: str) -> str:
+    slug_chars = []
+    for char in name.lower():
+        if char.isascii() and char.isalnum():
+            slug_chars.append(char)
+        else:
+            slug_chars.append("-")
+    slug = "-".join(part for part in "".join(slug_chars).split("-") if part)
+    return slug or "user"
 
 async def finish_vote(bot, vote_id):
     vote = votes.get(vote_id)
@@ -145,7 +199,7 @@ async def finish_vote(bot, vote_id):
     # cancel updater if present
     view = ACTIVE_VIEWS.pop(vote_id, None)
     if view:
-        await view.stop()
+        await view.stop_updater()
 
     try:
         channel = bot.get_channel(vote["channel_id"])
@@ -177,7 +231,12 @@ async def finish_vote(bot, vote_id):
             await asyncio.sleep(3600)
             try:
                 ch = bot.get_channel(vote["channel_id"])
-                if ch and ch.permissions_for(bot.user).manage_channels:
+                bot_member = None
+                if ch:
+                    bot_member = ch.guild.me
+                    if bot_member is None and bot.user:
+                        bot_member = ch.guild.get_member(bot.user.id)
+                if ch and bot_member and ch.permissions_for(bot_member).manage_channels:
                     await ch.delete(reason="Vote ended")
             except Exception:
                 pass
@@ -187,9 +246,60 @@ async def finish_vote(bot, vote_id):
         votes.pop(vote_id, None)
         save_votes()
 
-async def schedule_finish(bot, vote_id, duration_hours):
-    await asyncio.sleep(duration_hours * 3600)
+
+async def schedule_finish(bot, vote_id, delay_seconds):
+    await asyncio.sleep(max(0, int(delay_seconds)))
     await finish_vote(bot, vote_id)
+
+
+async def restore_vote_state(bot):
+    """Restore active vote views/tasks after bot restart."""
+    now = datetime.now(timezone.utc)
+    changed = False
+
+    # Defensive: stop old in-memory updaters before rebuilding.
+    for view in list(ACTIVE_VIEWS.values()):
+        try:
+            await view.stop_updater()
+        except Exception:
+            pass
+    ACTIVE_VIEWS.clear()
+
+    for vote_id, vote in list(votes.items()):
+        finish_time = _get_vote_finish_time(vote_id, vote)
+        if finish_time is None:
+            votes.pop(vote_id, None)
+            changed = True
+            continue
+
+        if vote.get("finish_at") != finish_time.isoformat():
+            vote["finish_at"] = finish_time.isoformat()
+            votes[vote_id] = vote
+            changed = True
+
+        if finish_time <= now:
+            bot.loop.create_task(finish_vote(bot, vote_id))
+            continue
+
+        message_id = vote.get("message_id")
+        channel_id = vote.get("channel_id")
+        if not isinstance(message_id, int) or not isinstance(channel_id, int):
+            votes.pop(vote_id, None)
+            changed = True
+            continue
+
+        view = VoteView(vote_id, finish_time, bot)
+        ACTIVE_VIEWS[vote_id] = view
+        try:
+            bot.add_view(view, message_id=message_id)
+        except Exception:
+            pass
+
+        delay_seconds = (finish_time - now).total_seconds()
+        bot.loop.create_task(schedule_finish(bot, vote_id, delay_seconds))
+
+    if changed:
+        save_votes()
 
 def setup_vote_module(bot: commands.Bot):
     @bot.command(name="startvote")
@@ -198,6 +308,8 @@ def setup_vote_module(bot: commands.Bot):
         guild = ctx.guild
         if not guild:
             return await ctx.send("This command must be used in a server.")
+        if duration_hours < 1 or duration_hours > 168:
+            return await ctx.send("⚠️ Duration must be between 1 and 168 hours.")
 
         # create vote category if it doesn't exist
         category_name = "🚨 VOTES 🚨"
@@ -209,8 +321,8 @@ def setup_vote_module(bot: commands.Bot):
                 await ctx.send("⚠️ Could not create vote category. Check bot permissions.")
                 return
 
-        # create channel name (safe)
-        channel_name = f"🚨vote-against-{target.name}🚨".lower()[:100]
+        # create channel name that Discord accepts
+        channel_name = f"vote-against-{_safe_channel_slug(target.name)}"[:100]
 
         try:
             vote_channel = await guild.create_text_channel(channel_name, category=category)
@@ -253,6 +365,8 @@ def setup_vote_module(bot: commands.Bot):
             "channel_id": vote_channel.id,
             "message_id": message.id,
             "votes": {},
+            "duration_hours": duration_hours,
+            "finish_at": finish_time.isoformat(),
             "min_account_days": 7,
             "min_join_days": 1
         }
@@ -261,7 +375,4 @@ def setup_vote_module(bot: commands.Bot):
         await ctx.send(f"📣 Emergency vote started in {vote_channel.mention}. Make your voice heard!")
 
         # schedule finish
-        bot.loop.create_task(schedule_finish(bot, vote_id, duration_hours))
-
-
-
+        bot.loop.create_task(schedule_finish(bot, vote_id, duration_hours * 3600))
