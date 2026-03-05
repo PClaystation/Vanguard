@@ -772,10 +772,19 @@ async def on_ready():
         print(f"[VOTE] Restore failed: {exc}")
 
     try:
-        synced = await bot.tree.sync()
-        print(f"[SYNC] Synced {len(synced)} slash command(s)")
+        synced_global = await bot.tree.sync()
+        print(f"[SYNC] Synced {len(synced_global)} global slash command(s)")
     except Exception as exc:
-        print(f"[SYNC] Slash command sync failed: {exc}")
+        print(f"[SYNC] Global slash command sync failed: {exc}")
+
+    # Also sync to each guild for immediate command availability (no global propagation delay).
+    for guild in bot.guilds:
+        try:
+            bot.tree.copy_global_to(guild=guild)
+            synced_guild = await bot.tree.sync(guild=guild)
+            print(f"[SYNC] Guild {guild.id} synced {len(synced_guild)} command(s)")
+        except Exception as exc:
+            print(f"[SYNC] Guild {guild.id} sync failed: {exc}")
 
     if reminder_loop_task is None or reminder_loop_task.done():
         reminder_loop_task = asyncio.create_task(reminder_worker())
