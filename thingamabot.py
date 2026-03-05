@@ -45,6 +45,15 @@ TOS_URL = os.getenv("TERMS_OF_SERVICE_URL", "").strip()
 ID_RE = re.compile(r"(\d{17,20})")
 DURATION_TOKEN_RE = re.compile(r"(\d+)([smhdw])")
 
+ConfigChannelInput = (
+    discord.TextChannel
+    | discord.VoiceChannel
+    | discord.StageChannel
+    | discord.CategoryChannel
+    | discord.ForumChannel
+    | discord.Thread
+)
+
 
 def default_guild_settings() -> dict[str, Any]:
     return {
@@ -459,6 +468,14 @@ def resolve_default_role(guild: discord.Guild) -> discord.Role | None:
     if guild.default_role is not None:
         return guild.default_role
     return guild.get_role(guild.id)
+
+
+def ensure_text_channel(channel: ConfigChannelInput | None) -> discord.TextChannel | None:
+    if channel is None:
+        return None
+    if isinstance(channel, discord.TextChannel):
+        return channel
+    return None
 
 
 def has_elevated_permissions(perms: discord.Permissions | None) -> bool:
@@ -995,6 +1012,12 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
     if isinstance(err, commands.CommandOnCooldown):
         await ctx.send(f"⏳ Slow down. Try again in `{err.retry_after:.1f}` seconds.")
         return
+    if isinstance(err, app_commands.TransformerError):
+        if err.type is app_commands.AppCommandOptionType.channel:
+            await ctx.send("⚠️ Invalid channel type for that option. Choose a normal text channel.")
+        else:
+            await ctx.send("⚠️ Invalid argument. Check the command format and try again.")
+        return
     if isinstance(err, commands.MissingRequiredArgument):
         usage = f"{ctx.clean_prefix}{ctx.command.qualified_name} {ctx.command.signature}"
         await ctx.send(f"⚠️ Missing argument `{err.param.name}`.\nUsage: `{usage}`")
@@ -1118,10 +1141,10 @@ async def help_command(ctx: commands.Context, *, command_name: str | None = None
 async def setup_command(
     ctx: commands.Context,
     mod_role: discord.Role | None = None,
-    welcome_channel: discord.TextChannel | None = None,
+    welcome_channel: ConfigChannelInput | None = None,
     welcome_role: discord.Role | None = None,
-    log_channel: discord.TextChannel | None = None,
-    ops_channel: discord.TextChannel | None = None,
+    log_channel: ConfigChannelInput | None = None,
+    ops_channel: ConfigChannelInput | None = None,
 ):
     """Quick server setup for Vanguard baseline configuration."""
     result = await require_mod_context(ctx)
@@ -1131,14 +1154,28 @@ async def setup_command(
 
     if mod_role:
         guild_cfg["mod_role_ids"] = sorted({mod_role.id})
-    if welcome_channel:
-        guild_cfg["welcome_channel_id"] = welcome_channel.id
+    normalized_welcome_channel = ensure_text_channel(welcome_channel)
+    normalized_log_channel = ensure_text_channel(log_channel)
+    normalized_ops_channel = ensure_text_channel(ops_channel)
+
+    if welcome_channel is not None and normalized_welcome_channel is None:
+        await ctx.send("⚠️ `welcome_channel` must be a text channel.")
+        return
+    if log_channel is not None and normalized_log_channel is None:
+        await ctx.send("⚠️ `log_channel` must be a text channel.")
+        return
+    if ops_channel is not None and normalized_ops_channel is None:
+        await ctx.send("⚠️ `ops_channel` must be a text channel.")
+        return
+
+    if normalized_welcome_channel:
+        guild_cfg["welcome_channel_id"] = normalized_welcome_channel.id
     if welcome_role:
         guild_cfg["welcome_role_id"] = welcome_role.id
-    if log_channel:
-        guild_cfg["log_channel_id"] = log_channel.id
-    if ops_channel:
-        guild_cfg["ops_channel_id"] = ops_channel.id
+    if normalized_log_channel:
+        guild_cfg["log_channel_id"] = normalized_log_channel.id
+    if normalized_ops_channel:
+        guild_cfg["ops_channel_id"] = normalized_ops_channel.id
     if guild_cfg.get("lockdown_role_id") is None:
         default_role = resolve_default_role(guild)
         if default_role is not None:
@@ -1160,30 +1197,42 @@ async def setup_command(
 
 
 @bot.hybrid_command(name="setlogchannel")
-async def setlogchannel(ctx: commands.Context, channel: discord.TextChannel | None = None):
+async def setlogchannel(ctx: commands.Context, channel: ConfigChannelInput | None = None):
     """Set moderation log channel. Omit to clear."""
     result = await require_mod_context(ctx)
     if not result:
         return
     _, guild_cfg = result
-    guild_cfg["log_channel_id"] = channel.id if channel else None
+    normalized_channel = ensure_text_channel(channel)
+    if channel is not None and normalized_channel is None:
+        await ctx.send("⚠️ `channel` must be a text channel.")
+        return
+    guild_cfg["log_channel_id"] = normalized_channel.id if normalized_channel else None
     save_settings()
     await ctx.send(
-        f"✅ Log channel set to {channel.mention}." if channel else "✅ Log channel cleared."
+        f"✅ Log channel set to {normalized_channel.mention}."
+        if normalized_channel
+        else "✅ Log channel cleared."
     )
 
 
 @bot.hybrid_command(name="setopschannel")
-async def setopschannel(ctx: commands.Context, channel: discord.TextChannel | None = None):
+async def setopschannel(ctx: commands.Context, channel: ConfigChannelInput | None = None):
     """Set ops/alerts channel. Omit to clear."""
     result = await require_mod_context(ctx)
     if not result:
         return
     _, guild_cfg = result
-    guild_cfg["ops_channel_id"] = channel.id if channel else None
+    normalized_channel = ensure_text_channel(channel)
+    if channel is not None and normalized_channel is None:
+        await ctx.send("⚠️ `channel` must be a text channel.")
+        return
+    guild_cfg["ops_channel_id"] = normalized_channel.id if normalized_channel else None
     save_settings()
     await ctx.send(
-        f"✅ Ops channel set to {channel.mention}." if channel else "✅ Ops channel cleared."
+        f"✅ Ops channel set to {normalized_channel.mention}."
+        if normalized_channel
+        else "✅ Ops channel cleared."
     )
 
 
@@ -2081,16 +2130,20 @@ async def prefix_command(ctx: commands.Context, new_prefix: str | None = None):
 
 
 @bot.hybrid_command(name="setwelcomechannel")
-async def setwelcomechannel(ctx: commands.Context, channel: discord.TextChannel | None = None):
+async def setwelcomechannel(ctx: commands.Context, channel: ConfigChannelInput | None = None):
     """Mod/admin: set welcome channel. Omit to clear."""
     result = await require_mod_context(ctx)
     if not result:
         return
     _, guild_cfg = result
-    guild_cfg["welcome_channel_id"] = channel.id if channel else None
+    normalized_channel = ensure_text_channel(channel)
+    if channel is not None and normalized_channel is None:
+        await ctx.send("⚠️ `channel` must be a text channel.")
+        return
+    guild_cfg["welcome_channel_id"] = normalized_channel.id if normalized_channel else None
     save_settings()
-    if channel:
-        await ctx.send(f"✅ Welcome channel set to {channel.mention}.")
+    if normalized_channel:
+        await ctx.send(f"✅ Welcome channel set to {normalized_channel.mention}.")
     else:
         await ctx.send("✅ Welcome channel cleared. System/default channel fallback will be used.")
 
