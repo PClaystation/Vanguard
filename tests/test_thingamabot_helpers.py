@@ -29,10 +29,8 @@ def test_normalize_settings_clamps_values(monkeypatch, tmp_path):
         "owner_only": "true",
         "guilds": {
             "123": {
-                "prefix": "abcdef",
                 "welcome_channel_id": "42",
                 "mod_role_ids": ["5", "not-an-id", 7],
-                "mc_port": 99999,
                 "guard_threshold": 1,
                 "guard_window_seconds": 2,
                 "guard_new_account_hours": 0,
@@ -52,10 +50,11 @@ def test_normalize_settings_clamps_values(monkeypatch, tmp_path):
     cfg = normalized["guilds"]["123"]
 
     assert normalized["owner_only"] is True
-    assert cfg["prefix"] == "abcde"
     assert cfg["welcome_channel_id"] == 42
     assert cfg["mod_role_ids"] == [5, 7]
-    assert cfg["mc_port"] == 25565
+    assert "prefix" not in cfg
+    assert "mc_port" not in cfg
+    assert "mc_host" not in cfg
     assert cfg["guard_threshold"] == 8
     assert cfg["guard_window_seconds"] == 30
     assert cfg["guard_new_account_hours"] == 24

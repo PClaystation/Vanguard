@@ -34,6 +34,7 @@
       <nav class="nav-links" aria-label="Primary">
         <a href="#features">Features</a>
         <a href="#commands">Commands</a>
+        <a href="#guard">Guard</a>
         <a href="#voting">Voting</a>
         <a href="#deploy">Deploy</a>
         <a href="https://github.com/PClaystation" target="_blank" rel="noreferrer"
@@ -145,6 +146,56 @@
           <div class="command-item"><code>/remind</code> Keep teams on task</div>
           <div class="command-item"><code>/poll</code> Gather quick decisions</div>
           <div class="command-item"><code>/vanguard</code> AI assistant relay</div>
+        </div>
+      </section>
+
+      <section id="guard" class="section container reveal">
+        <p class="section-kicker">Guard System</p>
+        <h3>Layered anti-raid protection with automated response controls.</h3>
+        <div class="guard-grid">
+          <article class="guard-card">
+            <p class="guard-label">Detection Signals</p>
+            <h4>Multi-Signal Threat Tracking</h4>
+            <ul class="guard-points">
+              <li>New-account message bursts</li>
+              <li>Join floods in short windows</li>
+              <li>Mention spam and ping bursts</li>
+              <li>Duplicate-message raids</li>
+              <li>Link and invite spam waves</li>
+            </ul>
+          </article>
+          <article class="guard-card">
+            <p class="guard-label">Automated Defense</p>
+            <h4>Fast, Graduated Mitigation</h4>
+            <ul class="guard-points">
+              <li>Severity-aware trigger logic</li>
+              <li>Scoped slowmode in active channels</li>
+              <li>Optional auto-timeout on trigger</li>
+              <li>Optional trigger-message deletion</li>
+              <li>Cooldown + suppression protection</li>
+            </ul>
+          </article>
+          <aside class="guard-commands" aria-label="Guard command quick reference">
+            <p class="guard-label">Guard Commands</p>
+            <div class="guard-command-list">
+              <div class="guard-command">
+                <code>/guard</code>
+                <span>Baseline controls + presets (`relaxed`, `balanced`, `strict`, `siege`)</span>
+              </div>
+              <div class="guard-command">
+                <code>/guardadvanced</code>
+                <span>Tune join, mention, duplicate, and link detectors</span>
+              </div>
+              <div class="guard-command">
+                <code>/guardstatus</code>
+                <span>Live status + runtime metrics snapshot</span>
+              </div>
+              <div class="guard-command">
+                <code>/guardreset</code>
+                <span>Clear in-memory guard trackers safely</span>
+              </div>
+            </div>
+          </aside>
         </div>
       </section>
 

@@ -13,6 +13,7 @@ from discord.ext import commands
 MAX_TIMEOUT_SECONDS = 60 * 60 * 24 * 28
 ACTIVE_CHANNEL_WINDOW_SECONDS = 900
 DUPLICATE_TRACKER_CLEAN_INTERVAL_SECONDS = 60
+CHANNEL_ACTIVITY_CLEAN_INTERVAL_SECONDS = 30
 
 URL_RE = re.compile(r"(?:https?://|www\.)\S+", re.IGNORECASE)
 INVITE_RE = re.compile(
@@ -172,6 +173,7 @@ mention_rate_tracker: dict[int, deque[datetime]] = defaultdict(deque)
 link_rate_tracker: dict[int, deque[datetime]] = defaultdict(deque)
 duplicate_message_tracker: dict[int, dict[str, deque[tuple[datetime, int]]]] = defaultdict(dict)
 channel_activity_tracker: dict[int, dict[int, datetime]] = defaultdict(dict)
+channel_activity_cleanup_at: dict[int, datetime] = {}
 duplicate_cleanup_at: dict[int, datetime] = {}
 guard_last_trigger: dict[int, datetime] = {}
 
@@ -433,10 +435,18 @@ def _record_channel_activity(guild_id: int, channel_id: int | None, now: datetim
         return
     channel_activity = channel_activity_tracker[guild_id]
     channel_activity[channel_id] = now
+
+    last_cleanup = channel_activity_cleanup_at.get(guild_id)
+    if last_cleanup and (now - last_cleanup).total_seconds() < CHANNEL_ACTIVITY_CLEAN_INTERVAL_SECONDS:
+        return
+    channel_activity_cleanup_at[guild_id] = now
+
     cutoff = now - timedelta(seconds=ACTIVE_CHANNEL_WINDOW_SECONDS)
     stale_channel_ids = [cid for cid, seen_at in channel_activity.items() if seen_at < cutoff]
-    for channel_id in stale_channel_ids:
-        channel_activity.pop(channel_id, None)
+    for stale_id in stale_channel_ids:
+        channel_activity.pop(stale_id, None)
+    if not channel_activity:
+        channel_activity_tracker.pop(guild_id, None)
 
 
 def _contains_link(content: str) -> bool:
@@ -700,9 +710,9 @@ async def handle_guard_message(
         if guild is None:
             return
 
-        cfg = normalize_guard_settings(guild_cfg)
-        if not cfg.get("guard_enabled", False):
+        if not _as_bool(guild_cfg.get("guard_enabled"), False):
             return
+        cfg = normalize_guard_settings(guild_cfg)
 
         now = datetime.now(timezone.utc)
         channel_id = _as_int(getattr(message.channel, "id", None))
@@ -887,9 +897,9 @@ async def handle_guard_member_join(
 ) -> None:
     try:
         guild = member.guild
-        cfg = normalize_guard_settings(guild_cfg)
-        if not cfg.get("guard_enabled", False):
+        if not _as_bool(guild_cfg.get("guard_enabled"), False):
             return
+        cfg = normalize_guard_settings(guild_cfg)
         if not bool(cfg.get("guard_detect_joins", True)):
             return
 
@@ -980,6 +990,7 @@ def clear_guard_runtime(guild_id: int) -> None:
     link_rate_tracker.pop(guild_id, None)
     duplicate_message_tracker.pop(guild_id, None)
     channel_activity_tracker.pop(guild_id, None)
+    channel_activity_cleanup_at.pop(guild_id, None)
     duplicate_cleanup_at.pop(guild_id, None)
     guard_last_trigger.pop(guild_id, None)
     guard_runtime_stats.pop(guild_id, None)

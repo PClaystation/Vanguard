@@ -8,6 +8,7 @@ import os
 import platform
 import random
 import re
+from threading import local
 import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -16,7 +17,6 @@ from urllib.parse import quote
 import discord
 from discord import app_commands
 from discord.ext import commands
-from mcstatus import JavaServer
 import requests
 try:
     from dotenv import load_dotenv
@@ -42,10 +42,6 @@ from vote import (
 )
 
 load_dotenv()
-
-BOT_PREFIX = os.getenv("BOT_PREFIX", "/")
-MAX_PREFIX_LENGTH = 5
-
 
 def _parse_env_bool(name: str, default: bool) -> bool:
     raw = os.getenv(name)
@@ -238,12 +234,6 @@ VANGUARD_LICENSE_RECHECK_SECONDS = _parse_env_int(
     minimum=60,
     maximum=86400,
 )
-MC_DEFAULT_HOST = os.getenv("MC_DEFAULT_HOST")
-try:
-    MC_DEFAULT_PORT = int(os.getenv("MC_DEFAULT_PORT", "25565"))
-except ValueError:
-    MC_DEFAULT_PORT = 25565
-
 SETTINGS_FILE = resolve_data_file("settings.json")
 REMINDERS_FILE = resolve_data_file("reminders.json")
 MOD_LOG_FILE = resolve_data_file("modlog.json")
@@ -266,7 +256,6 @@ ConfigChannelInput = discord.TextChannel
 
 def default_guild_settings() -> dict[str, Any]:
     guild_cfg: dict[str, Any] = {
-        "prefix": None,
         "welcome_channel_id": None,
         "welcome_role_id": None,
         "welcome_message": None,
@@ -274,8 +263,6 @@ def default_guild_settings() -> dict[str, Any]:
         "log_channel_id": None,
         "lockdown_role_id": None,
         "mod_role_ids": [],
-        "mc_host": None,
-        "mc_port": 25565,
     }
     guild_cfg.update(guard_default_settings())
     return guild_cfg
@@ -349,11 +336,6 @@ def normalize_settings(raw: Any) -> dict[str, Any]:
 
         guild_cfg = default_guild_settings()
 
-        prefix = cfg.get("prefix")
-        if isinstance(prefix, str):
-            prefix = prefix.strip()
-            guild_cfg["prefix"] = prefix[:MAX_PREFIX_LENGTH] if prefix else None
-
         guild_cfg["welcome_channel_id"] = as_int(cfg.get("welcome_channel_id"))
         guild_cfg["welcome_role_id"] = as_int(cfg.get("welcome_role_id"))
         guild_cfg["ops_channel_id"] = as_int(cfg.get("ops_channel_id"))
@@ -370,12 +352,6 @@ def normalize_settings(raw: Any) -> dict[str, Any]:
             guild_cfg["mod_role_ids"] = [
                 role_id for role_id in (as_int(value) for value in role_ids) if role_id
             ]
-
-        host = cfg.get("mc_host")
-        guild_cfg["mc_host"] = host.strip() if isinstance(host, str) and host.strip() else None
-
-        port = as_int(cfg.get("mc_port"))
-        guild_cfg["mc_port"] = port if port and 1 <= port <= 65535 else 25565
 
         guild_cfg.update(normalize_guard_settings(cfg))
 
@@ -802,16 +778,6 @@ async def send_ops_log(guild: discord.Guild, message: str) -> None:
             pass
 
 
-def get_active_prefix(guild: discord.Guild | None) -> str:
-    if guild is None:
-        return BOT_PREFIX
-    guild_cfg = get_guild_config(guild.id)
-    guild_prefix = guild_cfg.get("prefix")
-    if isinstance(guild_prefix, str) and guild_prefix:
-        return guild_prefix
-    return BOT_PREFIX
-
-
 def build_backend_headers(include_license: bool = False) -> dict[str, str]:
     headers: dict[str, str] = {}
     if VANGUARD_BACKEND_API_KEY:
@@ -821,6 +787,29 @@ def build_backend_headers(include_license: bool = False) -> dict[str, str]:
     if include_license and VANGUARD_LICENSE_KEY:
         headers["Authorization"] = f"Bearer {VANGUARD_LICENSE_KEY}"
     return headers
+
+
+_http_session_local = local()
+
+
+def _get_http_session() -> requests.Session:
+    session = getattr(_http_session_local, "session", None)
+    if session is not None:
+        return session
+    session = requests.Session()
+    adapter = requests.adapters.HTTPAdapter(
+        pool_connections=16,
+        pool_maxsize=16,
+        max_retries=0,
+    )
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    setattr(_http_session_local, "session", session)
+    return session
+
+
+def http_request(method: str, url: str, **kwargs: Any) -> requests.Response:
+    return _get_http_session().request(method=method, url=url, **kwargs)
 
 
 def parse_allowed_guild_ids(value: Any) -> set[int]:
@@ -874,7 +863,8 @@ def verify_license_sync(
     }
     headers = build_backend_headers(include_license=True)
 
-    response = requests.post(
+    response = http_request(
+        "POST",
         VANGUARD_LICENSE_VERIFY_URL,
         json=payload,
         headers=headers or None,
@@ -965,7 +955,8 @@ async def send_backend_user_update(
     backend_headers = build_backend_headers()
     try:
         response = await asyncio.to_thread(
-            requests.post,
+            http_request,
+            "POST",
             endpoint,
             json=payload,
             headers=backend_headers or None,
@@ -1480,16 +1471,16 @@ async def help_command(ctx: commands.Context, *, command_name: str | None = None
     embed.add_field(
         name="General",
         value=(
-            "`help` `ping` `uptime` `botstats` `serverinfo` `userinfo` `avatar` "
-            "`voteinfo` `activevotes` `myvote` `voteconfig` `ops` `health`"
+            "`help` `status` `serverinfo` `userinfo` `avatar` "
+            "`voteinfo` `activevotes` `voteconfig` `ops`"
         ),
         inline=False,
     )
     embed.add_field(
         name="Community",
         value=(
-            "`rules` `mcstatus` `poll` `choose` `roll` `remindme` `reminders` "
-            "`cancelreminder` `startvote` `votecreate` `startelection` `voteextend` `voteclose`"
+            "`poll` `choose` `roll` `remindme` `reminders` "
+            "`cancelreminder` `votecreate` `startelection` `voteextend` `voteclose`"
         ),
         inline=False,
     )
@@ -1505,14 +1496,14 @@ async def help_command(ctx: commands.Context, *, command_name: str | None = None
         name="Configuration",
         value=(
             "`showconfig` `setwelcomechannel` `setwelcomerole` "
-            "`setwelcomemessage` `setlockdownrole` `setmodroles` `setmcserver` `clearmcserver` "
-            "`setup` `setlogchannel` `setopschannel`"
+            "`setwelcomemessage` `setlockdownrole` `setmodroles` "
+            "`setlogchannel` `setopschannel`"
         ),
         inline=False,
     )
     embed.add_field(
         name="Legal",
-        value="`privacy` `tos` `data`",
+        value="`privacy` `tos`",
         inline=False,
     )
     embed.add_field(
@@ -1521,80 +1512,6 @@ async def help_command(ctx: commands.Context, *, command_name: str | None = None
         inline=False,
     )
     await ctx.send(embed=embed)
-
-
-@bot.hybrid_command(name="setup")
-async def setup_command(
-    ctx: commands.Context,
-    mod_role: discord.Role | None = None,
-    welcome_channel: ConfigChannelInput | None = None,
-    welcome_role: discord.Role | None = None,
-    log_channel: ConfigChannelInput | None = None,
-    ops_channel: ConfigChannelInput | None = None,
-):
-    """Quick server setup for Vanguard baseline configuration."""
-    result = await require_mod_context(ctx)
-    if not result:
-        return
-    guild, guild_cfg = result
-
-    if mod_role:
-        guild_cfg["mod_role_ids"] = sorted({mod_role.id})
-    normalized_welcome_channel = ensure_text_channel(welcome_channel)
-    normalized_log_channel = ensure_text_channel(log_channel)
-    normalized_ops_channel = ensure_text_channel(ops_channel)
-
-    if welcome_channel is not None and normalized_welcome_channel is None:
-        await ctx.send("⚠️ `welcome_channel` must be a text channel.")
-        return
-    if log_channel is not None and normalized_log_channel is None:
-        await ctx.send("⚠️ `log_channel` must be a text channel.")
-        return
-    if ops_channel is not None and normalized_ops_channel is None:
-        await ctx.send("⚠️ `ops_channel` must be a text channel.")
-        return
-
-    welcome_channel_id_input = get_channel_id(normalized_welcome_channel)
-    log_channel_id_input = get_channel_id(normalized_log_channel)
-    ops_channel_id_input = get_channel_id(normalized_ops_channel)
-
-    if welcome_channel is not None and welcome_channel_id_input is None:
-        await ctx.send("⚠️ Could not resolve `welcome_channel` ID.")
-        return
-    if log_channel is not None and log_channel_id_input is None:
-        await ctx.send("⚠️ Could not resolve `log_channel` ID.")
-        return
-    if ops_channel is not None and ops_channel_id_input is None:
-        await ctx.send("⚠️ Could not resolve `ops_channel` ID.")
-        return
-
-    if normalized_welcome_channel:
-        guild_cfg["welcome_channel_id"] = welcome_channel_id_input
-    if welcome_role:
-        guild_cfg["welcome_role_id"] = welcome_role.id
-    if normalized_log_channel:
-        guild_cfg["log_channel_id"] = log_channel_id_input
-    if normalized_ops_channel:
-        guild_cfg["ops_channel_id"] = ops_channel_id_input
-    if guild_cfg.get("lockdown_role_id") is None:
-        default_role = resolve_default_role(guild)
-        if default_role is not None:
-            guild_cfg["lockdown_role_id"] = default_role.id
-
-    save_settings()
-    mod_roles_text = ", ".join(f"<@&{rid}>" for rid in guild_cfg.get("mod_role_ids", [])) or "not set"
-    welcome_channel_id = guild_cfg.get("welcome_channel_id")
-    log_channel_id = guild_cfg.get("log_channel_id")
-    ops_channel_id = guild_cfg.get("ops_channel_id")
-    await ctx.send(
-        "✅ Setup complete.\n"
-        "- Commands: slash-only (`/`)\n"
-        f"- Mod roles: {mod_roles_text}\n"
-        f"- Welcome channel: {f'<#{welcome_channel_id}>' if welcome_channel_id else 'fallback mode'}\n"
-        f"- Log channel: {f'<#{log_channel_id}>' if log_channel_id else 'not set'}\n"
-        f"- Ops channel: {f'<#{ops_channel_id}>' if ops_channel_id else 'not set'}"
-    )
-
 
 @bot.hybrid_command(name="setlogchannel")
 async def setlogchannel(ctx: commands.Context, channel: ConfigChannelInput | None = None):
@@ -1693,12 +1610,16 @@ async def ops(ctx: commands.Context):
                 pass
 
 
-@bot.hybrid_command(name="health")
-async def health(ctx: commands.Context):
-    """Runtime health and dependency checks."""
+@bot.hybrid_command(name="status")
+async def status(ctx: commands.Context):
+    """Runtime status, dependency checks, and key bot metrics."""
     checks: list[tuple[str, str]] = []
     checks.append(("Discord", "OK"))
     checks.append(("Latency", f"{round(bot.latency * 1000)}ms"))
+    checks.append(("Uptime", format_duration(int((datetime.now(timezone.utc) - START_TIME).total_seconds()))))
+    checks.append(("Guilds", str(len(bot.guilds))))
+    unique_user_count = len({member.id for guild in bot.guilds for member in guild.members})
+    checks.append(("Unique Users", str(unique_user_count)))
     checks.append(("Settings File", "OK" if os.path.exists(SETTINGS_FILE) else "MISSING"))
     checks.append(("Reminders File", "OK" if os.path.exists(REMINDERS_FILE) else "MISSING"))
     checks.append(("Mod Log File", "OK" if os.path.exists(MOD_LOG_FILE) else "MISSING"))
@@ -1709,7 +1630,8 @@ async def health(ctx: commands.Context):
     if AI_HEALTH_URL:
         try:
             response = await asyncio.to_thread(
-                requests.get,
+                http_request,
+                "GET",
                 AI_HEALTH_URL,
                 headers=backend_headers or None,
                 timeout=4,
@@ -1731,7 +1653,8 @@ async def health(ctx: commands.Context):
 
         try:
             model_response = await asyncio.to_thread(
-                requests.get,
+                http_request,
+                "GET",
                 AI_MODELS_URL,
                 headers=backend_headers or None,
                 timeout=4,
@@ -1761,20 +1684,24 @@ async def health(ctx: commands.Context):
     checks.append(("License Gate", license_status))
     checks.append(("Guild Allowlist", allowlist_status))
 
-    embed = discord.Embed(title="Vanguard Health", color=discord.Color.red())
+    embed = discord.Embed(title="Vanguard Status", color=discord.Color.red())
     for key, value in checks:
         embed.add_field(name=key, value=value, inline=True)
-    embed.set_footer(text=f"Uptime: {format_duration(int((datetime.now(timezone.utc) - START_TIME).total_seconds()))}")
+    embed.set_footer(text=f"Generated at {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     await ctx.send(embed=embed)
 
 
 @bot.hybrid_command(name="privacy")
 async def privacy(ctx: commands.Context):
-    """Show Privacy Policy link."""
+    """Show data handling summary and Privacy Policy link."""
+    summary = (
+        "I store server config, moderation cases, reminders, and vote state to operate features. "
+        "Use `/tos` for terms."
+    )
     if PRIVACY_URL:
-        await ctx.send(f"Privacy Policy: {PRIVACY_URL}")
+        await ctx.send(f"{summary}\nPrivacy Policy: {PRIVACY_URL}")
     else:
-        await ctx.send("Privacy policy link not configured. Set `PRIVACY_POLICY_URL` in `.env`.")
+        await ctx.send(f"{summary}\nPrivacy policy link not configured. Set `PRIVACY_POLICY_URL` in `.env`.")
 
 
 @bot.hybrid_command(name="tos")
@@ -1784,39 +1711,6 @@ async def tos(ctx: commands.Context):
         await ctx.send(f"Terms of Service: {TOS_URL}")
     else:
         await ctx.send("ToS link not configured. Set `TERMS_OF_SERVICE_URL` in `.env`.")
-
-
-@bot.hybrid_command(name="data")
-async def data(ctx: commands.Context):
-    """Explain what data the bot stores and how to request deletion."""
-    await ctx.send(
-        "I store server config, moderation cases, reminders, and vote state to operate features. "
-        "Use `/privacy` and `/tos` for full policy links."
-    )
-
-@bot.hybrid_command()
-async def ping(ctx: commands.Context):
-    """Show bot latency."""
-    await ctx.send(f"🏓 Pong: `{round(bot.latency * 1000)}ms`")
-
-
-@bot.hybrid_command()
-async def uptime(ctx: commands.Context):
-    """Show bot uptime."""
-    elapsed = int((datetime.now(timezone.utc) - START_TIME).total_seconds())
-    await ctx.send(f"⏱️ Uptime: `{format_duration(elapsed)}`")
-
-
-@bot.hybrid_command()
-async def botstats(ctx: commands.Context):
-    """Show overall bot stats."""
-    unique_user_count = len({member.id for guild in bot.guilds for member in guild.members})
-    embed = discord.Embed(title="Bot Stats", color=discord.Color.red())
-    embed.add_field(name="Guilds", value=str(len(bot.guilds)), inline=True)
-    embed.add_field(name="Unique Users", value=str(unique_user_count), inline=True)
-    embed.add_field(name="Latency", value=f"{round(bot.latency * 1000)}ms", inline=True)
-    embed.add_field(name="Uptime", value=format_duration(int((datetime.now(timezone.utc) - START_TIME).total_seconds())), inline=False)
-    await ctx.send(embed=embed)
 
 
 @bot.hybrid_command()
@@ -1964,7 +1858,7 @@ async def list_reminders(ctx: commands.Context):
     await send_chunked_message(ctx, "**Your reminders:**\n" + "\n".join(lines))
 
 
-@bot.hybrid_command(name="cancelreminder", aliases=["delreminder"])
+@bot.hybrid_command(name="cancelreminder")
 async def cancel_reminder(ctx: commands.Context, reminder_id: int):
     """Cancel one of your reminders by ID."""
     global reminders
@@ -2372,7 +2266,8 @@ async def vanguard(ctx: commands.Context, *, question: str):
         try:
             chat_status_code: int | None = None
             chat_response = await asyncio.to_thread(
-                requests.post,
+                http_request,
+                "POST",
                 AI_CHAT_URL,
                 json=chat_payload,
                 headers=backend_headers or None,
@@ -2390,7 +2285,8 @@ async def vanguard(ctx: commands.Context, *, question: str):
 
             if not answer:
                 response = await asyncio.to_thread(
-                    requests.post,
+                    http_request,
+                    "POST",
                     AI_ASK_URL,
                     json=ask_payload,
                     headers=backend_headers or None,
@@ -2437,7 +2333,8 @@ async def vanguardreset(ctx: commands.Context):
     backend_headers = build_backend_headers()
     try:
         response = await asyncio.to_thread(
-            requests.delete,
+            http_request,
+            "DELETE",
             delete_url,
             headers=backend_headers or None,
             timeout=AI_REQUEST_TIMEOUT_SECONDS,
@@ -2452,14 +2349,14 @@ async def vanguardreset(ctx: commands.Context):
         await ctx.send("⚠️ Unexpected error while resetting AI session memory.")
 
 
-@bot.hybrid_command(name="flaguser", aliases=["fuck"])
+@bot.hybrid_command(name="flaguser")
 @commands.is_owner()
 async def flaguser(ctx: commands.Context, target: str):
     """Owner-only: mark a user in backend moderation service."""
     await send_backend_user_update(ctx, target, FLAG_USER_URL, "has been flagged")
 
 
-@bot.hybrid_command(name="unflaguser", aliases=["unfuck"])
+@bot.hybrid_command(name="unflaguser")
 @commands.is_owner()
 async def unflaguser(ctx: commands.Context, target: str):
     """Owner-only: remove a backend moderation flag for a user."""
@@ -2489,36 +2386,6 @@ async def owneronly(ctx: commands.Context, state: str | None = None):
 
 
 @bot.hybrid_command()
-async def testwelcome(ctx: commands.Context, target: discord.Member | None = None):
-    """Send a preview welcome embed."""
-    result = await require_guild_context(ctx)
-    if not result:
-        return
-    _, guild_cfg = result
-    member = target or ctx.author
-    if not isinstance(member, discord.Member):
-        await ctx.send("⚠️ Could not resolve member.")
-        return
-    await ctx.send(embed=build_welcome_embed(member, guild_cfg))
-
-
-@bot.hybrid_command()
-async def rules(ctx: commands.Context):
-    embed = discord.Embed(
-        title="Server Rules",
-        description=(
-            "1. Be respectful.\n"
-            "2. No spam.\n"
-            "3. Keep content in the correct channels.\n"
-            "4. No harassment or hate speech.\n"
-            "5. Follow moderator instructions."
-        ),
-        color=discord.Color.red(),
-    )
-    await ctx.send(embed=embed)
-
-
-@bot.hybrid_command()
 async def serverinfo(ctx: commands.Context):
     if ctx.guild is None:
         await ctx.send("⚠️ This command can only be used in a server.")
@@ -2542,35 +2409,6 @@ async def serverinfo(ctx: commands.Context):
 
 
 @bot.hybrid_command()
-async def mcstatus(ctx: commands.Context):
-    result = await require_guild_context(ctx)
-    if not result:
-        return
-    _, guild_cfg = result
-    guild_host = guild_cfg.get("mc_host")
-    if guild_host:
-        host = guild_host
-        port = guild_cfg.get("mc_port", 25565)
-    else:
-        host = MC_DEFAULT_HOST
-        port = MC_DEFAULT_PORT
-
-    if not host:
-        await ctx.send("⚠️ Minecraft server is not configured. Use `/setmcserver <host> [port]`.")
-        return
-
-    server = JavaServer.lookup(f"{host}:{port}")
-    try:
-        status = await asyncio.to_thread(server.status)
-        await ctx.send(
-            f"✅ Minecraft server `{host}:{port}` is online. "
-            f"Players: {status.players.online}/{status.players.max}"
-        )
-    except Exception:
-        await ctx.send(f"❌ Minecraft server `{host}:{port}` is offline or unreachable.")
-
-
-@bot.hybrid_command()
 async def lockdown(ctx: commands.Context):
     await set_lockdown_state(ctx, True)
 
@@ -2578,13 +2416,6 @@ async def lockdown(ctx: commands.Context):
 @bot.hybrid_command()
 async def unlock(ctx: commands.Context):
     await set_lockdown_state(ctx, False)
-
-
-@bot.hybrid_command(name="prefix")
-async def prefix_command(ctx: commands.Context, new_prefix: str | None = None):
-    """Legacy command retained for compatibility."""
-    _ = new_prefix
-    await ctx.send("ℹ️ Prefix commands are disabled. Use slash commands (`/`) only.")
 
 
 @bot.hybrid_command(name="setwelcomechannel")
@@ -2686,40 +2517,6 @@ async def setmodroles(ctx: commands.Context, roles: str | None = None):
     else:
         await ctx.send("✅ Mod role list cleared. Only Manage Server/Admin can run mod commands.")
 
-
-@bot.hybrid_command(name="setmcserver")
-async def setmcserver(ctx: commands.Context, host: str, port: int = 25565):
-    """Mod/admin: configure this guild's Minecraft server host/port."""
-    result = await require_mod_context(ctx)
-    if not result:
-        return
-    _, guild_cfg = result
-    if not 1 <= port <= 65535:
-        await ctx.send("⚠️ Port must be between 1 and 65535.")
-        return
-    normalized_host = host.strip()
-    if not normalized_host:
-        await ctx.send("⚠️ Host cannot be empty.")
-        return
-    guild_cfg["mc_host"] = normalized_host
-    guild_cfg["mc_port"] = port
-    save_settings()
-    await ctx.send(f"✅ Minecraft server set to `{guild_cfg['mc_host']}:{guild_cfg['mc_port']}`.")
-
-
-@bot.hybrid_command(name="clearmcserver")
-async def clearmcserver(ctx: commands.Context):
-    """Mod/admin: clear this guild's Minecraft server settings."""
-    result = await require_mod_context(ctx)
-    if not result:
-        return
-    _, guild_cfg = result
-    guild_cfg["mc_host"] = None
-    guild_cfg["mc_port"] = 25565
-    save_settings()
-    await ctx.send("✅ Minecraft server setting cleared for this server.")
-
-
 @bot.hybrid_command(name="showconfig")
 async def showconfig(ctx: commands.Context):
     """Show active configuration for this server."""
@@ -2740,12 +2537,6 @@ async def showconfig(ctx: commands.Context):
     mod_roles = [resolve_role(guild, role_id) for role_id in guild_cfg.get("mod_role_ids", [])]
     mod_roles = [role for role in mod_roles if role]
 
-    if guild_cfg.get("mc_host"):
-        host = guild_cfg["mc_host"]
-        port = guild_cfg.get("mc_port", 25565)
-    else:
-        host = MC_DEFAULT_HOST
-        port = MC_DEFAULT_PORT
     guard_cfg = normalize_guard_settings(guild_cfg)
 
     embed = discord.Embed(title="Server Bot Configuration", color=discord.Color.red())
@@ -2779,11 +2570,6 @@ async def showconfig(ctx: commands.Context):
     embed.add_field(
         name="Mod Roles",
         value=", ".join(role.mention for role in mod_roles) if mod_roles else "Not set (Manage Server/Admin only)",
-        inline=False,
-    )
-    embed.add_field(
-        name="Minecraft Server",
-        value=f"`{host}:{port}`" if host else "Not set",
         inline=False,
     )
     embed.add_field(

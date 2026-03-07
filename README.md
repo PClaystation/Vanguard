@@ -13,8 +13,8 @@ This repository is source-available, not open-source.
 
 - Moderation commands: lockdown, timeout, warn, purge, undo/cases
 - Community commands: reminders, poll/choose/roll, server/user info
-- Ops features: health check, guard mode, advanced vote tracking (custom ballots, elections, runoff, quorum/threshold rules), AI chat relay with session memory (`/vanguard`) and reset (`/vanguardreset`)
-- Policy commands: privacy, terms, data summary
+- Ops features: status checks, guard mode, advanced vote tracking (custom ballots, elections, runoff, quorum/threshold rules), AI chat relay with session memory (`/vanguard`) and reset (`/vanguardreset`)
+- Policy commands: privacy and terms
 
 ## Requirements
 
@@ -49,7 +49,6 @@ python3 thingamabot.py
 Environment variables are read from `.env` (via `python-dotenv`) or your shell.
 
 - `DISCORD_BOT_TOKEN` (required)
-- `BOT_PREFIX` (legacy, default: `/`; message-prefix commands are disabled)
 - `AI_SERVER_BASE_URL` (default: derived from `AI_SERVER_URL`, usually `http://localhost:3001`)
 - `AI_SERVER_URL` (legacy/default ask endpoint, default: `http://localhost:3001/ask`)
 - `AI_ASK_URL` (default: `${AI_SERVER_BASE_URL}/ask`)
@@ -79,8 +78,6 @@ Environment variables are read from `.env` (via `python-dotenv`) or your shell.
 - `VANGUARD_LICENSE_KEY` (optional bearer token for license verification)
 - `VANGUARD_REQUIRE_LICENSE` (default: `false`; when `true`, commands are blocked if license check fails)
 - `VANGUARD_LICENSE_RECHECK_SECONDS` (default: `900`, range: `60..86400`)
-- `MC_DEFAULT_HOST` (optional)
-- `MC_DEFAULT_PORT` (default: `25565`)
 - `PRIVACY_POLICY_URL` (optional)
 - `TERMS_OF_SERVICE_URL` (optional)
 - `VANGUARD_DATA_DIR` (default: `./data`)

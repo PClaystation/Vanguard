@@ -90,17 +90,6 @@ def _get_vote_finish_time(vote_id: str, vote: dict[str, Any]) -> datetime | None
     return started_at + timedelta(hours=duration_hours)
 
 
-def _safe_channel_slug(name: str) -> str:
-    slug_chars: list[str] = []
-    for char in str(name or "").lower():
-        if char.isascii() and char.isalnum():
-            slug_chars.append(char)
-        else:
-            slug_chars.append("-")
-    slug = "-".join(part for part in "".join(slug_chars).split("-") if part)
-    return slug or "vote"
-
-
 def _normalize_option_id(value: Any, index: int) -> str:
     text = str(value or "").strip().lower()
     text = re.sub(r"[^a-z0-9]+", "-", text)
@@ -983,6 +972,14 @@ class VoteView(discord.ui.View):
         ballots = _clean_ballot_map(vote)
         user_id = str(interaction.user.id)
         previous = ballots.get(user_id)
+        if previous == choices:
+            text = f"ℹ️ Your ballot is unchanged: {ballot_to_text(vote, choices)}"
+            if interaction.response.is_done():
+                await interaction.followup.send(text, ephemeral=True)
+            else:
+                await interaction.response.send_message(text, ephemeral=True)
+            return
+
         ballots[user_id] = choices
         vote["ballots"] = ballots
         _sync_legacy_vote_fields(vote)
@@ -991,8 +988,6 @@ class VoteView(discord.ui.View):
 
         if previous is None:
             text = f"✅ Ballot recorded: {ballot_to_text(vote, choices)}"
-        elif previous == choices:
-            text = f"ℹ️ Your ballot is unchanged: {ballot_to_text(vote, choices)}"
         else:
             text = (
                 f"🔁 Ballot updated: {ballot_to_text(vote, previous)}"
@@ -1542,101 +1537,6 @@ def _vote_belongs_to_guild(vote_id: str, guild: discord.Guild) -> bool:
 
 
 def setup_vote_module(bot: commands.Bot) -> None:
-    @bot.hybrid_command(name="startvote")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    @commands.bot_has_permissions(manage_channels=True, send_messages=True, embed_links=True)
-    async def startvote(
-        ctx: commands.Context,
-        target: discord.Member,
-        duration_hours: int = 24,
-        quorum: int = 0,
-        pass_threshold_percent: int = 50,
-        min_account_days: int = 7,
-        min_join_days: int = 1,
-        anonymous: bool = False,
-        hide_live_results: bool = False,
-    ) -> None:
-        """Start a server-wide emergency no-confidence vote against a member."""
-        guild = ctx.guild
-        if not guild:
-            await _send_ctx_message(ctx, "This command must be used in a server.")
-            return
-
-        duration_hours = _as_int(duration_hours, 24) or 24
-        if duration_hours < 1 or duration_hours > MAX_DURATION_HOURS:
-            await _send_ctx_message(ctx, f"⚠️ Duration must be between 1 and {MAX_DURATION_HOURS} hours.")
-            return
-
-        category_name = "🚨 VOTES 🚨"
-        category = discord.utils.get(guild.categories, name=category_name)
-        if category is None:
-            try:
-                category = await guild.create_category(category_name)
-            except Exception:
-                await _send_ctx_message(ctx, "⚠️ Could not create vote category. Check bot permissions.")
-                return
-
-        channel_name = f"vote-against-{_safe_channel_slug(target.display_name)}"[:100]
-        try:
-            vote_channel = await guild.create_text_channel(channel_name, category=category)
-        except Exception:
-            await _send_ctx_message(ctx, "⚠️ Could not create vote channel. Check bot permissions.")
-            return
-
-        options = [
-            {"id": "against", "label": "Against", "description": "", "member_id": None},
-            {"id": "support", "label": "Support", "description": "", "member_id": None},
-        ]
-
-        title = f"Emergency No-Confidence Vote: {target.display_name}"
-        description = (
-            f"A server-wide no-confidence vote has been initiated against **{target.display_name}**. "
-            "Vote carefully and responsibly."
-        )
-
-        try:
-            vote_id, _ = await _create_vote(
-                bot=bot,
-                guild=guild,
-                channel=vote_channel,
-                starter_id=ctx.author.id,
-                title=title,
-                description=description,
-                vote_type="confidence",
-                options=options,
-                ballot_mode="single",
-                max_choices=1,
-                duration_hours=duration_hours,
-                min_account_days=max(0, _as_int(min_account_days, 7) or 7),
-                min_join_days=max(0, _as_int(min_join_days, 1) or 1),
-                quorum=max(0, _as_int(quorum, 0) or 0),
-                pass_threshold_percent=_clamp(_as_int(pass_threshold_percent, 50) or 50, 1, 100),
-                anonymous=bool(anonymous),
-                show_live_results=not bool(hide_live_results),
-                eligible_role_id=None,
-                primary_option_id="against",
-                target_id=target.id,
-                target_name=str(target),
-                seats=1,
-                runoff_enabled=False,
-                mention_everyone=True,
-                delete_channel_after_close=True,
-                delete_delay_seconds=3600,
-            )
-        except Exception:
-            try:
-                await vote_channel.delete(reason="Failed to initialize emergency vote")
-            except Exception:
-                pass
-            await _send_ctx_message(ctx, "⚠️ Failed to initialize the vote message.")
-            return
-
-        await _send_ctx_message(
-            ctx,
-            f"📣 Emergency vote started in {vote_channel.mention}. Vote ID: `{vote_id}`",
-        )
-
     @bot.hybrid_command(name="votecreate")
     @commands.guild_only()
     @commands.has_permissions(manage_guild=True)
@@ -1644,7 +1544,7 @@ def setup_vote_module(bot: commands.Bot) -> None:
     async def votecreate(
         ctx: commands.Context,
         title: str,
-        options: str,
+        options: str = "",
         duration_hours: int = 24,
         vote_type: str = "proposal",
         max_choices: int = 1,
@@ -1656,8 +1556,10 @@ def setup_vote_module(bot: commands.Bot) -> None:
         min_join_days: int = 0,
         eligible_role: discord.Role | None = None,
         channel: discord.TextChannel | None = None,
+        target: discord.Member | None = None,
+        mention_everyone: bool = False,
     ) -> None:
-        """Create a configurable vote. Options format: option1 | option2 | option3."""
+        """Create a configurable vote. For confidence votes, set vote_type=confidence and provide target."""
         guild = ctx.guild
         if not guild:
             await _send_ctx_message(ctx, "This command must be used in a server.")
@@ -1669,25 +1571,52 @@ def setup_vote_module(bot: commands.Bot) -> None:
             return
 
         vote_type = str(vote_type or "proposal").strip().lower()
-        if vote_type not in {"proposal", "yesno", "approval"}:
-            await _send_ctx_message(ctx, "⚠️ vote_type must be one of: proposal, yesno, approval.")
+        if vote_type not in {"proposal", "yesno", "approval", "confidence"}:
+            await _send_ctx_message(ctx, "⚠️ vote_type must be one of: proposal, yesno, approval, confidence.")
             return
 
-        option_values = _parse_pipe_values(options, limit=MAX_OPTIONS)
-        if vote_type == "yesno":
-            if len(option_values) < 2:
-                option_values = ["Yes", "No"]
-            option_values = option_values[:2]
-        elif len(option_values) < 2:
-            await _send_ctx_message(ctx, "⚠️ Provide at least 2 options separated by `|`.")
-            return
-
-        option_list = _build_option_list(option_values)
-        ballot_mode = "multiple" if vote_type == "approval" or (max_choices and max_choices > 1) else "single"
-        max_choices = _as_int(max_choices, 1) or 1
-        max_choices = _clamp(max_choices, 1, max(1, len(option_list)))
-        if ballot_mode == "single":
+        target_id: int | None = None
+        target_name = ""
+        description = ""
+        option_list: list[dict[str, Any]]
+        if vote_type == "confidence":
+            if target is None:
+                await _send_ctx_message(ctx, "⚠️ confidence votes require a `target` member.")
+                return
+            option_list = [
+                {"id": "against", "label": "Against", "description": "", "member_id": None},
+                {"id": "support", "label": "Support", "description": "", "member_id": None},
+            ]
+            ballot_mode = "single"
             max_choices = 1
+            target_id = target.id
+            target_name = str(target)
+            if not title.strip():
+                title = f"No-Confidence Vote: {target.display_name}"
+            description = (
+                f"A no-confidence vote has been initiated against **{target.display_name}**. "
+                "Vote carefully and responsibly."
+            )
+            if min_account_days <= 0:
+                min_account_days = 7
+            if min_join_days <= 0:
+                min_join_days = 1
+        else:
+            option_values = _parse_pipe_values(options, limit=MAX_OPTIONS)
+            if vote_type == "yesno":
+                if len(option_values) < 2:
+                    option_values = ["Yes", "No"]
+                option_values = option_values[:2]
+            elif len(option_values) < 2:
+                await _send_ctx_message(ctx, "⚠️ Provide at least 2 options separated by `|`.")
+                return
+
+            option_list = _build_option_list(option_values)
+            ballot_mode = "multiple" if vote_type == "approval" or (max_choices and max_choices > 1) else "single"
+            max_choices = _as_int(max_choices, 1) or 1
+            max_choices = _clamp(max_choices, 1, max(1, len(option_list)))
+            if ballot_mode == "single":
+                max_choices = 1
 
         target_channel = channel or ctx.channel
         if not isinstance(target_channel, discord.TextChannel):
@@ -1697,6 +1626,8 @@ def setup_vote_module(bot: commands.Bot) -> None:
         primary_option_id = None
         if vote_type == "yesno":
             primary_option_id = option_list[0]["id"]
+        if vote_type == "confidence":
+            primary_option_id = "against"
 
         try:
             vote_id, _ = await _create_vote(
@@ -1705,7 +1636,7 @@ def setup_vote_module(bot: commands.Bot) -> None:
                 channel=target_channel,
                 starter_id=ctx.author.id,
                 title=title[:120],
-                description="",
+                description=description,
                 vote_type=vote_type,
                 options=option_list,
                 ballot_mode=ballot_mode,
@@ -1719,11 +1650,21 @@ def setup_vote_module(bot: commands.Bot) -> None:
                 show_live_results=not bool(hide_live_results),
                 eligible_role_id=eligible_role.id if eligible_role else None,
                 primary_option_id=primary_option_id,
+                target_id=target_id,
+                target_name=target_name,
                 seats=1,
                 runoff_enabled=False,
+                mention_everyone=bool(mention_everyone and vote_type == "confidence"),
             )
         except Exception:
             await _send_ctx_message(ctx, "⚠️ Failed to create vote message.")
+            return
+
+        if vote_type == "confidence":
+            await _send_ctx_message(
+                ctx,
+                f"🚨 No-confidence vote created in {target_channel.mention}. Vote ID: `{vote_id}`",
+            )
             return
 
         await _send_ctx_message(
@@ -1897,33 +1838,6 @@ def setup_vote_module(bot: commands.Bot) -> None:
         await _send_ctx_message(
             ctx,
             f"⏳ Extended `{vote_id}` by {extra_hours}h. New end: <t:{int(new_finish.timestamp())}:F>",
-        )
-
-    @bot.hybrid_command(name="myvote")
-    @commands.guild_only()
-    async def myvote(ctx: commands.Context, vote_id: str) -> None:
-        """Show your current ballot for a vote."""
-        guild = ctx.guild
-        if not guild:
-            await _send_ctx_message(ctx, "This command must be used in a server.")
-            return
-
-        vote_id = str(vote_id or "").strip()
-        if not _vote_belongs_to_guild(vote_id, guild):
-            await _send_ctx_message(ctx, "❌ This vote ID does not belong to this server.", ephemeral=True)
-            return
-
-        vote = votes.get(vote_id)
-        if vote is None:
-            await _send_ctx_message(ctx, "❌ Vote not found.", ephemeral=True)
-            return
-
-        ballots = _clean_ballot_map(vote)
-        current = ballots.get(str(ctx.author.id), [])
-        await _send_ctx_message(
-            ctx,
-            f"🗳️ Your ballot for `{vote_id}`: {ballot_to_text(vote, current)}",
-            ephemeral=True,
         )
 
     @bot.hybrid_command(name="voteconfig")
