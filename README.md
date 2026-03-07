@@ -92,6 +92,15 @@ python3 -m py_compile thingamabot.py vote.py data_paths.py
 
 GitHub Actions runs compile checks, Ruff, and Pytest on push/PR.
 
+## Website (GitHub Pages)
+
+- Static site files are in `docs/` for GitHub Pages publishing.
+- In GitHub repo settings, set Pages source to:
+  - `Deploy from a branch`
+  - Branch: `main` (or your default branch)
+  - Folder: `/docs`
+- `docs/404.html` is included for GitHub Pages fallback handling.
+
 ## Project Notes
 
 - `thingamabot.py` is the active Python bot entrypoint.
