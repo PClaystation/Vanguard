@@ -6,7 +6,7 @@ Discord moderation + utility bot with hybrid commands (slash + prefix), reminder
 
 - Moderation commands: lockdown, timeout, warn, purge, undo/cases
 - Community commands: reminders, poll/choose/roll, server/user info
-- Ops features: health check, guard mode, vote tracking, AI relay command
+- Ops features: health check, guard mode, vote tracking, AI chat relay with session memory (`/vanguard`) and reset (`/vanguardreset`)
 - Policy commands: privacy, terms, data summary
 
 ## Requirements
@@ -43,7 +43,24 @@ Environment variables are read from `.env` (via `python-dotenv`) or your shell.
 
 - `DISCORD_BOT_TOKEN` (required)
 - `BOT_PREFIX` (default: `!`)
-- `AI_SERVER_URL` (default: `http://localhost:3001/ask`)
+- `AI_SERVER_BASE_URL` (default: derived from `AI_SERVER_URL`, usually `http://localhost:3001`)
+- `AI_SERVER_URL` (legacy/default ask endpoint, default: `http://localhost:3001/ask`)
+- `AI_ASK_URL` (default: `${AI_SERVER_BASE_URL}/ask`)
+- `AI_CHAT_URL` (default: `${AI_SERVER_BASE_URL}/chat`)
+- `AI_HEALTH_URL` (default: `${AI_SERVER_BASE_URL}/health`)
+- `AI_MODELS_URL` (default: `${AI_SERVER_BASE_URL}/models`)
+- `AI_SESSION_URL` (default: `${AI_SERVER_BASE_URL}/session`)
+- `AI_REQUEST_TIMEOUT_SECONDS` (default: `20`)
+- `AI_CHAT_STYLE` (`concise|balanced|detailed`, default: `balanced`)
+- `AI_HISTORY_MESSAGES` (default: `12`, max: `24`)
+- `AI_USE_CONTEXT` (default: `true`)
+- `AI_USE_CACHE` (default: `true`)
+- `AI_INCLUDE_DEBUG` (default: `false`)
+- `AI_MODEL` (optional model override for `/chat`)
+- `AI_TEMPERATURE` (optional, range `0..2`)
+- `AI_TOP_P` (optional, range `0..1`)
+- `AI_NUM_PREDICT` (optional, range `1..4096`)
+- `AI_REPEAT_PENALTY` (optional, range `0.8..2`)
 - `FLAG_USER_URL` (default: `http://localhost:3001/fuck`)
 - `UNFLAG_USER_URL` (default: `http://localhost:3001/unfuck`)
 - `MC_DEFAULT_HOST` (optional)

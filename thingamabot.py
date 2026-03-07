@@ -7,6 +7,7 @@ import re
 import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from urllib.parse import quote
 
 import discord
 from discord import app_commands
@@ -26,7 +27,161 @@ load_dotenv()
 
 BOT_PREFIX = os.getenv("BOT_PREFIX", "!")
 MAX_PREFIX_LENGTH = 5
-AI_SERVER_URL = os.getenv("AI_SERVER_URL", "http://localhost:3001/ask")
+
+
+def _parse_env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    value = raw.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
+def _parse_env_int(name: str, default: int, minimum: int | None = None, maximum: int | None = None) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    if minimum is not None and value < minimum:
+        return default
+    if maximum is not None and value > maximum:
+        return default
+    return value
+
+
+def _parse_env_optional_int(name: str, minimum: int | None = None, maximum: int | None = None) -> int | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    if minimum is not None and value < minimum:
+        return None
+    if maximum is not None and value > maximum:
+        return None
+    return value
+
+
+def _parse_env_optional_float(
+    name: str,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    if minimum is not None and value < minimum:
+        return None
+    if maximum is not None and value > maximum:
+        return None
+    return value
+
+
+def _resolve_ai_base_url(explicit_base_url: str, legacy_url: str) -> str:
+    explicit = explicit_base_url.strip().rstrip("/")
+    if explicit:
+        return explicit
+
+    candidate = legacy_url.strip().rstrip("/")
+    if not candidate:
+        return "http://localhost:3001"
+
+    known_suffixes = (
+        "/chat/stream",
+        "/reload-context",
+        "/health",
+        "/models",
+        "/stats",
+        "/chat",
+        "/ask",
+    )
+    for suffix in known_suffixes:
+        if candidate.endswith(suffix):
+            base = candidate[: -len(suffix)].rstrip("/")
+            return base if base else "http://localhost:3001"
+    return candidate
+
+
+def _extract_ai_answer(payload: Any) -> str:
+    if isinstance(payload, str):
+        return payload.strip()
+    if not isinstance(payload, dict):
+        return ""
+
+    fields = ("answer", "response", "message", "text", "output")
+    for field in fields:
+        value = payload.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    nested = payload.get("data")
+    if isinstance(nested, dict):
+        return _extract_ai_answer(nested)
+    return ""
+
+
+def _extract_model_count(payload: Any) -> int | None:
+    if isinstance(payload, list):
+        return len(payload)
+    if isinstance(payload, dict):
+        models = payload.get("models")
+        if isinstance(models, list):
+            return len(models)
+    return None
+
+
+def _build_ai_session_id(guild_id: int | None, channel_id: int | None, user_id: int) -> str:
+    scope = guild_id if guild_id is not None else "dm"
+    return f"discord:{scope}:{channel_id or 0}:{user_id}"
+
+
+def _build_ai_options() -> dict[str, Any]:
+    options: dict[str, Any] = {}
+    if AI_TEMPERATURE is not None:
+        options["temperature"] = AI_TEMPERATURE
+    if AI_TOP_P is not None:
+        options["top_p"] = AI_TOP_P
+    if AI_NUM_PREDICT is not None:
+        options["num_predict"] = AI_NUM_PREDICT
+    if AI_REPEAT_PENALTY is not None:
+        options["repeat_penalty"] = AI_REPEAT_PENALTY
+    return options
+
+
+_legacy_ai_url = os.getenv("AI_SERVER_URL", "http://localhost:3001/ask")
+AI_SERVER_BASE_URL = _resolve_ai_base_url(os.getenv("AI_SERVER_BASE_URL", ""), _legacy_ai_url)
+AI_ASK_URL = os.getenv("AI_ASK_URL", f"{AI_SERVER_BASE_URL}/ask").strip()
+AI_CHAT_URL = os.getenv("AI_CHAT_URL", f"{AI_SERVER_BASE_URL}/chat").strip()
+AI_HEALTH_URL = os.getenv("AI_HEALTH_URL", f"{AI_SERVER_BASE_URL}/health").strip()
+AI_MODELS_URL = os.getenv("AI_MODELS_URL", f"{AI_SERVER_BASE_URL}/models").strip()
+AI_SESSION_URL = os.getenv("AI_SESSION_URL", f"{AI_SERVER_BASE_URL}/session").strip().rstrip("/")
+AI_SERVER_URL = AI_ASK_URL
+AI_REQUEST_TIMEOUT_SECONDS = _parse_env_int("AI_REQUEST_TIMEOUT_SECONDS", 20, minimum=2, maximum=120)
+AI_CHAT_STYLE = os.getenv("AI_CHAT_STYLE", "balanced").strip().lower()
+if AI_CHAT_STYLE not in {"concise", "balanced", "detailed"}:
+    AI_CHAT_STYLE = "balanced"
+AI_HISTORY_MESSAGES = _parse_env_int("AI_HISTORY_MESSAGES", 12, minimum=1, maximum=24)
+AI_USE_CONTEXT = _parse_env_bool("AI_USE_CONTEXT", True)
+AI_USE_CACHE = _parse_env_bool("AI_USE_CACHE", True)
+AI_INCLUDE_DEBUG = _parse_env_bool("AI_INCLUDE_DEBUG", False)
+AI_MODEL = os.getenv("AI_MODEL", "").strip() or None
+AI_TEMPERATURE = _parse_env_optional_float("AI_TEMPERATURE", minimum=0.0, maximum=2.0)
+AI_TOP_P = _parse_env_optional_float("AI_TOP_P", minimum=0.0, maximum=1.0)
+AI_NUM_PREDICT = _parse_env_optional_int("AI_NUM_PREDICT", minimum=1, maximum=4096)
+AI_REPEAT_PENALTY = _parse_env_optional_float("AI_REPEAT_PENALTY", minimum=0.8, maximum=2.0)
 FLAG_USER_URL = os.getenv("FLAG_USER_URL", "http://localhost:3001/fuck")
 UNFLAG_USER_URL = os.getenv("UNFLAG_USER_URL", "http://localhost:3001/unfuck")
 MC_DEFAULT_HOST = os.getenv("MC_DEFAULT_HOST")
@@ -1449,13 +1604,41 @@ async def health(ctx: commands.Context):
     checks.append(("Mod Log File", "OK" if os.path.exists(MOD_LOG_FILE) else "MISSING"))
 
     ai_status = "DISABLED"
-    if AI_SERVER_URL:
+    model_status = "N/A"
+    if AI_HEALTH_URL:
         try:
-            response = await asyncio.to_thread(requests.get, AI_SERVER_URL, timeout=4)
-            ai_status = f"HTTP {response.status_code}"
+            response = await asyncio.to_thread(requests.get, AI_HEALTH_URL, timeout=4)
+            if response.status_code == 200:
+                ai_status = "OK"
+                try:
+                    health_payload = response.json()
+                except ValueError:
+                    health_payload = {}
+                if isinstance(health_payload, dict):
+                    ollama_status = str(health_payload.get("ollama") or "").strip()
+                    if ollama_status:
+                        ai_status = f"OK ({ollama_status})"
+            else:
+                ai_status = f"HTTP {response.status_code}"
         except Exception:
             ai_status = "UNREACHABLE"
+
+        try:
+            model_response = await asyncio.to_thread(requests.get, AI_MODELS_URL, timeout=4)
+            if model_response.status_code == 200:
+                try:
+                    model_payload = model_response.json()
+                except ValueError:
+                    model_payload = {}
+                model_count = _extract_model_count(model_payload)
+                model_status = str(model_count) if model_count is not None else "UNKNOWN"
+            else:
+                model_status = f"HTTP {model_response.status_code}"
+        except Exception:
+            model_status = "UNREACHABLE"
+
     checks.append(("AI Backend", ai_status))
+    checks.append(("AI Models", model_status))
 
     embed = discord.Embed(title="Vanguard Health", color=discord.Color.red())
     for key, value in checks:
@@ -2033,31 +2216,74 @@ async def undo(ctx: commands.Context, case_id: int):
 @bot.hybrid_command()
 @commands.cooldown(3, 30, commands.BucketType.user)
 async def vanguard(ctx: commands.Context, *, question: str):
-    """Ask the AI server a question and get a response."""
+    """Ask the AI server and keep channel-local memory for follow-up questions."""
     async with ctx.typing():
-        payload = {
+        ask_payload = {
             "question": question,
             "username": str(ctx.author),
             "userId": str(ctx.author.id),
         }
+        session_id = _build_ai_session_id(
+            ctx.guild.id if ctx.guild else None,
+            getattr(ctx.channel, "id", None),
+            ctx.author.id,
+        )
+        chat_payload: dict[str, Any] = {
+            "message": question,
+            "sessionId": session_id,
+            "style": AI_CHAT_STYLE,
+            "historyMessages": AI_HISTORY_MESSAGES,
+            "useContext": AI_USE_CONTEXT,
+            "useCache": AI_USE_CACHE,
+        }
+        if AI_MODEL:
+            chat_payload["model"] = AI_MODEL
+        if AI_INCLUDE_DEBUG:
+            chat_payload["includeDebug"] = True
+        chat_options = _build_ai_options()
+        if chat_options:
+            chat_payload["options"] = chat_options
+
         title_text = "AI Response"
         answer = ""
+        used_chat_endpoint = False
         try:
-            response = await asyncio.to_thread(
+            chat_status_code: int | None = None
+            chat_response = await asyncio.to_thread(
                 requests.post,
-                AI_SERVER_URL,
-                json=payload,
-                timeout=20,
+                AI_CHAT_URL,
+                json=chat_payload,
+                timeout=AI_REQUEST_TIMEOUT_SECONDS,
             )
-            if response.status_code == 200:
+            if chat_response.status_code == 200:
                 try:
-                    data = response.json()
+                    data = chat_response.json()
                 except ValueError:
                     data = {}
-                answer = str(data.get("answer") or "").strip() or "No response from the AI service."
+                answer = _extract_ai_answer(data)
+                used_chat_endpoint = bool(answer)
             else:
-                title_text = f"AI service returned HTTP {response.status_code}."
-                answer = response.text
+                chat_status_code = chat_response.status_code
+
+            if not answer:
+                response = await asyncio.to_thread(
+                    requests.post,
+                    AI_ASK_URL,
+                    json=ask_payload,
+                    timeout=AI_REQUEST_TIMEOUT_SECONDS,
+                )
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                    except ValueError:
+                        data = {}
+                    answer = _extract_ai_answer(data)
+                    if not answer:
+                        answer = "No response from the AI service."
+                else:
+                    status_code = chat_status_code if chat_status_code is not None else response.status_code
+                    title_text = f"AI service returned HTTP {status_code}."
+                    answer = response.text
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
             title_text = "AI service is currently unreachable."
         except Exception:
@@ -2067,8 +2293,33 @@ async def vanguard(ctx: commands.Context, *, question: str):
     if not answer:
         answer = "No additional details."
     embed = discord.Embed(title=title_text, description=answer, color=discord.Color.red())
-    embed.set_footer(text="Powered by Vanguard AI")
+    if used_chat_endpoint:
+        embed.set_footer(text=f"Powered by Vanguard AI • style={AI_CHAT_STYLE} • memory=on")
+    else:
+        embed.set_footer(text="Powered by Vanguard AI • compatibility mode")
     await ctx.send(embed=embed)
+
+
+@bot.hybrid_command(name="vanguardreset")
+@commands.cooldown(3, 30, commands.BucketType.user)
+async def vanguardreset(ctx: commands.Context):
+    """Clear your AI chat memory for this channel."""
+    session_id = _build_ai_session_id(
+        ctx.guild.id if ctx.guild else None,
+        getattr(ctx.channel, "id", None),
+        ctx.author.id,
+    )
+    delete_url = f"{AI_SESSION_URL}/{quote(session_id, safe='')}"
+    try:
+        response = await asyncio.to_thread(requests.delete, delete_url, timeout=AI_REQUEST_TIMEOUT_SECONDS)
+        if response.status_code in {200, 204, 404}:
+            await ctx.send("✅ AI session memory reset for this channel.")
+        else:
+            await ctx.send(f"⚠️ Could not reset AI session (HTTP {response.status_code}).")
+    except (requests.exceptions.Timeout, requests.exceptions.ConnectionError):
+        await ctx.send("⚠️ AI session reset service is unreachable right now.")
+    except Exception:
+        await ctx.send("⚠️ Unexpected error while resetting AI session memory.")
 
 
 @bot.hybrid_command(name="flaguser", aliases=["fuck"])

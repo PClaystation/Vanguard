@@ -64,3 +64,34 @@ def test_runtime_files_live_in_data_dir(monkeypatch, tmp_path):
 
     bot.write_json_atomic(bot.SETTINGS_FILE, {"ok": True})
     assert Path(bot.SETTINGS_FILE).exists()
+
+
+def test_ai_endpoints_derive_from_legacy_ask_url(monkeypatch, tmp_path):
+    for key in ("AI_SERVER_BASE_URL", "AI_ASK_URL", "AI_CHAT_URL", "AI_HEALTH_URL", "AI_MODELS_URL", "AI_SESSION_URL"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("AI_SERVER_URL", "http://localhost:3001/ask")
+
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    assert bot.AI_SERVER_BASE_URL == "http://localhost:3001"
+    assert bot.AI_ASK_URL == "http://localhost:3001/ask"
+    assert bot.AI_CHAT_URL == "http://localhost:3001/chat"
+    assert bot.AI_HEALTH_URL == "http://localhost:3001/health"
+    assert bot.AI_MODELS_URL == "http://localhost:3001/models"
+    assert bot.AI_SESSION_URL == "http://localhost:3001/session"
+
+
+def test_extract_ai_answer_supports_nested_shapes(monkeypatch, tmp_path):
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    assert bot._extract_ai_answer({"answer": "Top level"}) == "Top level"
+    assert bot._extract_ai_answer({"data": {"response": "Nested"}}) == "Nested"
+    assert bot._extract_ai_answer("plain text") == "plain text"
+    assert bot._extract_ai_answer({"foo": "bar"}) == ""
+
+
+def test_build_ai_session_id_is_stable(monkeypatch, tmp_path):
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    assert bot._build_ai_session_id(123, 456, 789) == "discord:123:456:789"
+    assert bot._build_ai_session_id(None, 456, 789) == "discord:dm:456:789"
