@@ -1,6 +1,6 @@
 # Vanguard
 
-Discord moderation + utility bot with hybrid commands (slash + prefix), reminders, incident guardrails, and vote workflows.
+Discord moderation + utility bot with slash commands, reminders, incident guardrails, and vote workflows.
 
 ## License Notice
 
@@ -49,7 +49,7 @@ python3 thingamabot.py
 Environment variables are read from `.env` (via `python-dotenv`) or your shell.
 
 - `DISCORD_BOT_TOKEN` (required)
-- `BOT_PREFIX` (default: `!`)
+- `BOT_PREFIX` (legacy, default: `/`; message-prefix commands are disabled)
 - `AI_SERVER_BASE_URL` (default: derived from `AI_SERVER_URL`, usually `http://localhost:3001`)
 - `AI_SERVER_URL` (legacy/default ask endpoint, default: `http://localhost:3001/ask`)
 - `AI_ASK_URL` (default: `${AI_SERVER_BASE_URL}/ask`)

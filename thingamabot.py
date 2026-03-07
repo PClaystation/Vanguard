@@ -29,7 +29,7 @@ from vote import restore_vote_state, setup_vote_module, votes as vote_store
 
 load_dotenv()
 
-BOT_PREFIX = os.getenv("BOT_PREFIX", "!")
+BOT_PREFIX = os.getenv("BOT_PREFIX", "/")
 MAX_PREFIX_LENGTH = 5
 
 
@@ -992,8 +992,9 @@ async def license_worker() -> None:
             print(f"[ACCESS] License worker error: {exc}")
 
 
-def dynamic_prefix(bot_instance: commands.Bot, message: discord.Message):
-    return commands.when_mentioned_or(get_active_prefix(message.guild))(bot_instance, message)
+def disabled_message_prefix(_: commands.Bot, __: discord.Message) -> tuple[str, ...]:
+    # Disable message-based command parsing; this bot is slash-command only.
+    return ()
 
 
 async def send_backend_user_update(
@@ -1246,13 +1247,13 @@ async def reminder_worker() -> None:
 
 
 intents = discord.Intents.default()
-# Hybrid/prefix commands require message content intent for text command parsing.
+# Message content is still used by moderation guard logic.
 intents.message_content = True
 intents.guilds = True
 intents.members = True
 
 bot = commands.Bot(
-    command_prefix=dynamic_prefix,
+    command_prefix=disabled_message_prefix,
     intents=intents,
     help_command=None,
     case_insensitive=True,
@@ -1439,7 +1440,8 @@ async def on_message(message: discord.Message):
                         f"🛡️ Case `{case_id}` guard trigger in {message.channel.mention}: {details}",
                     )
 
-    await bot.process_commands(message)
+    # Slash commands are handled via interactions; ignore message command parsing.
+    return
 
 
 @bot.event
@@ -1545,7 +1547,7 @@ async def help_command(ctx: commands.Context, *, command_name: str | None = None
             await ctx.send("❌ Command not found.")
             return
 
-        usage = f"{ctx.clean_prefix}{command.qualified_name} {command.signature}".strip()
+        usage = f"/{command.qualified_name} {command.signature}".strip()
         embed = discord.Embed(title=f"Help: {command.qualified_name}", color=discord.Color.red())
         embed.add_field(name="Description", value=command.help or "No description.", inline=False)
         embed.add_field(name="Usage", value=f"`{usage}`", inline=False)
@@ -1554,12 +1556,8 @@ async def help_command(ctx: commands.Context, *, command_name: str | None = None
         await ctx.send(embed=embed)
         return
 
-    prefix = get_active_prefix(ctx.guild)
     embed = discord.Embed(title="Vanguard Bot Help", color=discord.Color.red())
-    embed.description = (
-        f"Prefix: `{prefix}` (or mention the bot)\n"
-        f"Use `{prefix}help <command>` for detailed help."
-    )
+    embed.description = "Slash commands only. Use `/help <command>` for detailed help."
     embed.add_field(
         name="General",
         value=(
@@ -1584,7 +1582,7 @@ async def help_command(ctx: commands.Context, *, command_name: str | None = None
     embed.add_field(
         name="Configuration",
         value=(
-            "`showconfig` `prefix` `setwelcomechannel` `setwelcomerole` "
+            "`showconfig` `setwelcomechannel` `setwelcomerole` "
             "`setwelcomemessage` `setlockdownrole` `setmodroles` `setmcserver` `clearmcserver` "
             "`setup` `setlogchannel` `setopschannel`"
         ),
@@ -1668,7 +1666,7 @@ async def setup_command(
     ops_channel_id = guild_cfg.get("ops_channel_id")
     await ctx.send(
         "✅ Setup complete.\n"
-        f"- Prefix: `{get_active_prefix(guild)}`\n"
+        "- Commands: slash-only (`/`)\n"
         f"- Mod roles: {mod_roles_text}\n"
         f"- Welcome channel: {f'<#{welcome_channel_id}>' if welcome_channel_id else 'fallback mode'}\n"
         f"- Log channel: {f'<#{log_channel_id}>' if log_channel_id else 'not set'}\n"
@@ -2029,7 +2027,7 @@ async def poll(ctx: commands.Context, *, content: str):
 
 @bot.hybrid_command()
 async def remindme(ctx: commands.Context, duration: str, *, message: str):
-    """Create a reminder. Example: !remindme 2h30m stretch."""
+    """Create a reminder. Example: /remindme 2h30m stretch."""
     seconds = parse_duration_to_seconds(duration)
     if seconds is None or seconds <= 0:
         await ctx.send("⚠️ Invalid duration. Example: `10m`, `2h30m`, `1d`.")
@@ -2219,7 +2217,7 @@ async def nick(ctx: commands.Context, member: discord.Member, *, nickname: str |
 @bot.hybrid_command()
 @commands.has_permissions(moderate_members=True)
 async def timeout(ctx: commands.Context, member: discord.Member, duration: str, *, reason: str | None = None):
-    """Timeout a member. Example: !timeout @user 30m spam"""
+    """Timeout a member. Example: /timeout @user 30m spam"""
     if ctx.guild is None:
         await ctx.send("⚠️ This command can only be used in a server.")
         return
@@ -2673,7 +2671,7 @@ async def mcstatus(ctx: commands.Context):
         port = MC_DEFAULT_PORT
 
     if not host:
-        await ctx.send("⚠️ Minecraft server is not configured. Use `!setmcserver <host> [port]`.")
+        await ctx.send("⚠️ Minecraft server is not configured. Use `/setmcserver <host> [port]`.")
         return
 
     server = JavaServer.lookup(f"{host}:{port}")
@@ -2699,48 +2697,9 @@ async def unlock(ctx: commands.Context):
 
 @bot.hybrid_command(name="prefix")
 async def prefix_command(ctx: commands.Context, new_prefix: str | None = None):
-    """Show or set this server's command prefix."""
-    if ctx.guild is None:
-        await ctx.send(f"Prefix in DMs is `{BOT_PREFIX}`.")
-        return
-
-    guild_cfg = get_guild_config(ctx.guild.id)
-    current_prefix = get_active_prefix(ctx.guild)
-    if new_prefix is None:
-        await ctx.send(f"Current prefix for this server is `{current_prefix}`.")
-        return
-
-    interaction_perms: discord.Permissions | None = None
-    if ctx.interaction is not None:
-        interaction_perms = ctx.interaction.permissions
-    member = await resolve_context_member(ctx, ctx.guild)
-    if member is None and has_elevated_permissions(interaction_perms):
-        member_ok = True
-    else:
-        member_ok = bool(member and has_mod_access(member, guild_cfg, interaction_perms))
-    if not member_ok:
-        await ctx.send("⛔ You do not have permission to change the prefix.")
-        return
-
-    candidate = new_prefix.strip()
-    if candidate.lower() in {"reset", "default"}:
-        guild_cfg["prefix"] = None
-        save_settings()
-        await ctx.send(f"✅ Prefix reset to default `{BOT_PREFIX}`.")
-        return
-    if not candidate:
-        await ctx.send("⚠️ Prefix cannot be empty.")
-        return
-    if len(candidate) > MAX_PREFIX_LENGTH:
-        await ctx.send(f"⚠️ Prefix cannot be longer than {MAX_PREFIX_LENGTH} characters.")
-        return
-    if candidate.startswith("<@"):
-        await ctx.send("⚠️ Prefix cannot be a mention.")
-        return
-
-    guild_cfg["prefix"] = candidate
-    save_settings()
-    await ctx.send(f"✅ Prefix updated from `{current_prefix}` to `{candidate}`.")
+    """Legacy command retained for compatibility."""
+    _ = new_prefix
+    await ctx.send("ℹ️ Prefix commands are disabled. Use slash commands (`/`) only.")
 
 
 @bot.hybrid_command(name="setwelcomechannel")
@@ -2904,7 +2863,7 @@ async def showconfig(ctx: commands.Context):
         port = MC_DEFAULT_PORT
 
     embed = discord.Embed(title="Server Bot Configuration", color=discord.Color.red())
-    embed.add_field(name="Prefix", value=f"`{get_active_prefix(guild)}`", inline=False)
+    embed.add_field(name="Commands", value="Slash-only (`/`)", inline=False)
     embed.add_field(
         name="Welcome Channel",
         value=welcome_channel.mention if isinstance(welcome_channel, discord.TextChannel) else "Not set (fallback mode)",
