@@ -263,6 +263,31 @@ h2 {
   box-shadow: 0 14px 30px rgba(0, 0, 0, 0.4);
 }
 
+.invite-btn {
+  position: relative;
+  padding: 14px 22px;
+  font-size: 0.97rem;
+  letter-spacing: 0.75px;
+  box-shadow: 0 0 0 1px rgba(255, 186, 186, 0.3), 0 16px 36px rgba(0, 0, 0, 0.42),
+    0 0 26px rgba(255, 32, 49, 0.6);
+  animation: invitePulse 1.8s ease-in-out infinite;
+}
+
+.invite-btn::after {
+  content: " ";
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #fff;
+  margin-left: 10px;
+  box-shadow: 0 0 10px #fff;
+}
+
+.invite-btn:hover {
+  transform: translateY(-2px) scale(1.02);
+}
+
 .btn-ghost {
   color: #ffeded;
   background: rgba(0, 0, 0, 0.25);
@@ -482,6 +507,18 @@ h3 {
   }
 }
 
+@keyframes invitePulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgba(255, 186, 186, 0.3),
+      0 16px 36px rgba(0, 0, 0, 0.42), 0 0 22px rgba(255, 32, 49, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(255, 67, 84, 0.22),
+      0 20px 40px rgba(0, 0, 0, 0.46), 0 0 34px rgba(255, 44, 61, 0.78);
+  }
+}
+
 @media (max-width: 980px) {
   .hero {
     grid-template-columns: 1fr;
@@ -521,6 +558,11 @@ h3 {
 
   .brand-product {
     font-size: 1.3rem;
+  }
+
+  .invite-btn {
+    padding: 12px 18px;
+    font-size: 0.9rem;
   }
 
   .section {
