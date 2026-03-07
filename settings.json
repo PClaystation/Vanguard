@@ -1,0 +1,58 @@
+{
+  "owner_only": false,
+  "guilds": {
+    "1417156603974778965": {
+      "prefix": null,
+      "welcome_channel_id": null,
+      "welcome_role_id": null,
+      "welcome_message": null,
+      "ops_channel_id": null,
+      "log_channel_id": null,
+      "lockdown_role_id": null,
+      "mod_role_ids": [],
+      "mc_host": null,
+      "mc_port": 25565,
+      "guard_enabled": true,
+      "guard_window_seconds": 30,
+      "guard_threshold": 8,
+      "guard_new_account_hours": 24,
+      "guard_slowmode_seconds": 30
+    },
+    "1479097487619920025": {
+      "prefix": null,
+      "welcome_channel_id": 1479102911580733583,
+      "welcome_role_id": 1479112459179786452,
+      "welcome_message": null,
+      "ops_channel_id": 1479389453331206358,
+      "log_channel_id": 1479389519601074187,
+      "lockdown_role_id": 1479097487619920025,
+      "mod_role_ids": [
+        1479110497000362077
+      ],
+      "mc_host": null,
+      "mc_port": 25565,
+      "guard_enabled": true,
+      "guard_window_seconds": 30,
+      "guard_threshold": 8,
+      "guard_new_account_hours": 24,
+      "guard_slowmode_seconds": 30
+    },
+    "1409501007880257729": {
+      "prefix": null,
+      "welcome_channel_id": null,
+      "welcome_role_id": null,
+      "welcome_message": null,
+      "ops_channel_id": null,
+      "log_channel_id": null,
+      "lockdown_role_id": null,
+      "mod_role_ids": [],
+      "mc_host": null,
+      "mc_port": 25565,
+      "guard_enabled": false,
+      "guard_window_seconds": 30,
+      "guard_threshold": 8,
+      "guard_new_account_hours": 24,
+      "guard_slowmode_seconds": 30
+    }
+  }
+}
