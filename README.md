@@ -13,7 +13,7 @@ This repository is source-available, not open-source.
 
 - Moderation commands: lockdown, timeout, warn, purge, undo/cases
 - Community commands: reminders, poll/choose/roll, server/user info
-- Ops features: health check, guard mode, vote tracking, AI chat relay with session memory (`/vanguard`) and reset (`/vanguardreset`)
+- Ops features: health check, guard mode, advanced vote tracking (custom ballots, elections, runoff, quorum/threshold rules), AI chat relay with session memory (`/vanguard`) and reset (`/vanguardreset`)
 - Policy commands: privacy, terms, data summary
 
 ## Requirements

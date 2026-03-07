@@ -25,7 +25,14 @@ except ImportError:
         return False
 
 from data_paths import resolve_data_file
-from vote import restore_vote_state, setup_vote_module, votes as vote_store
+from vote import (
+    ballot_to_text,
+    option_label,
+    restore_vote_state,
+    setup_vote_module,
+    tally_vote,
+    votes as vote_store,
+)
 
 load_dotenv()
 
@@ -1562,13 +1569,16 @@ async def help_command(ctx: commands.Context, *, command_name: str | None = None
         name="General",
         value=(
             "`help` `ping` `uptime` `botstats` `serverinfo` `userinfo` `avatar` "
-            "`voteinfo` `activevotes` `ops` `health`"
+            "`voteinfo` `activevotes` `myvote` `voteconfig` `ops` `health`"
         ),
         inline=False,
     )
     embed.add_field(
         name="Community",
-        value="`rules` `mcstatus` `poll` `choose` `roll` `remindme` `reminders` `cancelreminder` `startvote`",
+        value=(
+            "`rules` `mcstatus` `poll` `choose` `roll` `remindme` `reminders` "
+            "`cancelreminder` `startvote` `votecreate` `startelection` `voteextend` `voteclose`"
+        ),
         inline=False,
     )
     embed.add_field(
@@ -2914,7 +2924,7 @@ async def showconfig(ctx: commands.Context):
 
 @bot.hybrid_command(name="voteinfo")
 async def voteinfo(ctx: commands.Context, vote_id: str):
-    """Show who voted for what in a specific vote."""
+    """Show detailed state for a specific vote."""
     result = await require_guild_context(ctx)
     if not result:
         return
@@ -2929,16 +2939,61 @@ async def voteinfo(ctx: commands.Context, vote_id: str):
         await ctx.send("❌ Vote not found.")
         return
 
-    lines = []
-    for user_id, choice in vote.get("votes", {}).items():
-        member = guild.get_member(int(user_id))
-        username = member.display_name if member else f"Unknown ({user_id})"
-        lines.append(f"{username}: {choice}")
+    tallies, turnout = tally_vote(vote)
+    finish_at = parse_datetime_utc(vote.get("finish_at"))
+    finish_text = f"<t:{int(finish_at.timestamp())}:R>" if finish_at else "unknown"
 
-    if not lines:
-        await ctx.send("No votes yet.")
-    else:
-        await send_chunked_message(ctx, "**Vote results so far:**\n" + "\n".join(lines))
+    option_lines = []
+    for option in vote.get("options", []):
+        if not isinstance(option, dict):
+            continue
+        option_id = str(option.get("id") or "").strip()
+        if not option_id:
+            continue
+        count = tallies.get(option_id, 0)
+        pct = (count / turnout * 100) if turnout > 0 else 0.0
+        option_lines.append(f"{option_label(vote, option_id)}: {count} ({pct:.1f}%)")
+
+    header_lines = [
+        f"**{vote.get('title', 'Vote')}**",
+        f"Type: `{vote.get('vote_type', 'proposal')}` • Ballot mode: `{vote.get('ballot_mode', 'single')}`",
+        f"Turnout: {turnout} • Ends: {finish_text}",
+        f"Anonymous: {'yes' if bool(vote.get('anonymous')) else 'no'}",
+    ]
+    if option_lines:
+        header_lines.append("Tallies:")
+        header_lines.extend(option_lines)
+
+    is_anonymous = bool(vote.get("anonymous"))
+    can_view_ballots = (not is_anonymous) or ctx.author.guild_permissions.manage_guild
+    ballots = vote.get("ballots", {})
+    if not isinstance(ballots, dict):
+        ballots = {}
+
+    if not ballots:
+        header_lines.append("No ballots yet.")
+        await send_chunked_message(ctx, "\n".join(header_lines))
+        return
+
+    if not can_view_ballots:
+        header_lines.append("Individual ballots are hidden for this anonymous vote.")
+        await send_chunked_message(ctx, "\n".join(header_lines))
+        return
+
+    ballot_lines = []
+    for user_id, choice in ballots.items():
+        try:
+            numeric_id = int(user_id)
+        except (TypeError, ValueError):
+            continue
+        member = guild.get_member(numeric_id)
+        username = member.display_name if member else f"Unknown ({user_id})"
+        ballot_lines.append(f"{username}: {ballot_to_text(vote, choice)}")
+
+    if ballot_lines:
+        header_lines.append("Ballots:")
+        header_lines.extend(ballot_lines)
+    await send_chunked_message(ctx, "\n".join(header_lines))
 
 
 @bot.hybrid_command(name="activevotes")
@@ -2960,13 +3015,28 @@ async def activevotes(ctx: commands.Context):
 
     lines = []
     for vote_id, vote in sorted(active, key=lambda item: item[0])[:10]:
-        against_count = sum(1 for value in vote.get("votes", {}).values() if value == "against")
-        support_count = sum(1 for value in vote.get("votes", {}).values() if value == "support")
+        tallies, turnout = tally_vote(vote)
         finish_at = parse_datetime_utc(vote.get("finish_at"))
         finish_text = f"<t:{int(finish_at.timestamp())}:R>" if finish_at else "unknown"
+        title = str(vote.get("title") or "Vote")
+        vote_type = str(vote.get("vote_type") or "proposal")
+        if vote_type == "confidence" and vote.get("target_id"):
+            title = f"{title} (Target: <@{vote.get('target_id')}>)"
+
+        if tallies and bool(vote.get("show_live_results", True)):
+            top_option_id = max(
+                tallies.keys(),
+                key=lambda option_id: (tallies.get(option_id, 0), option_label(vote, option_id).lower()),
+            )
+            leader_text = f"{option_label(vote, top_option_id)} ({tallies.get(top_option_id, 0)})"
+        elif tallies:
+            leader_text = "hidden"
+        else:
+            leader_text = "no ballots"
+
         lines.append(
-            f"`{vote_id}`\nTarget: <@{vote.get('target_id', 'unknown')}> • "
-            f"Against: {against_count} • Support: {support_count} • Ends: {finish_text}"
+            f"`{vote_id}`\n{title} • Type: `{vote_type}` • Turnout: {turnout} • "
+            f"Leader: {leader_text} • Ends: {finish_text}"
         )
     await send_chunked_message(ctx, "**Active votes:**\n" + "\n\n".join(lines))
 
