@@ -2,6 +2,13 @@
 
 Discord moderation + utility bot with hybrid commands (slash + prefix), reminders, incident guardrails, and vote workflows.
 
+## License Notice
+
+This repository is source-available, not open-source.
+
+- Unauthorized copying, self-hosting, redistribution, and derivative/competing deployments are prohibited.
+- See [LICENSE](LICENSE), [TERMS_OF_SERVICE.md](TERMS_OF_SERVICE.md), and [PRIVACY_POLICY.md](PRIVACY_POLICY.md) for legal terms.
+
 ## What It Includes
 
 - Moderation commands: lockdown, timeout, warn, purge, undo/cases
@@ -14,7 +21,7 @@ Discord moderation + utility bot with hybrid commands (slash + prefix), reminder
 - Python 3.12+
 - A Discord bot token
 
-## Quick Start
+## Quick Start (Authorized Operators Only)
 
 1. Install dependencies:
 
@@ -63,11 +70,28 @@ Environment variables are read from `.env` (via `python-dotenv`) or your shell.
 - `AI_REPEAT_PENALTY` (optional, range `0.8..2`)
 - `FLAG_USER_URL` (default: `http://localhost:3001/fuck`)
 - `UNFLAG_USER_URL` (default: `http://localhost:3001/unfuck`)
+- `VANGUARD_BACKEND_API_KEY` (optional secret header value used for AI/backend requests)
+- `VANGUARD_BACKEND_KEY_HEADER` (default: `X-Vanguard-Api-Key`)
+- `VANGUARD_INSTANCE_ID` (optional instance identifier sent to backend/license service)
+- `VANGUARD_INSTANCE_HEADER` (default: `X-Vanguard-Instance-Id`)
+- `VANGUARD_ALLOWED_GUILD_IDS` (optional comma-separated guild allowlist)
+- `VANGUARD_LICENSE_VERIFY_URL` (optional endpoint returning `{ authorized: boolean, reason?: string, allowedGuildIds?: number[] }`)
+- `VANGUARD_LICENSE_KEY` (optional bearer token for license verification)
+- `VANGUARD_REQUIRE_LICENSE` (default: `false`; when `true`, commands are blocked if license check fails)
+- `VANGUARD_LICENSE_RECHECK_SECONDS` (default: `900`, range: `60..86400`)
 - `MC_DEFAULT_HOST` (optional)
 - `MC_DEFAULT_PORT` (default: `25565`)
 - `PRIVACY_POLICY_URL` (optional)
 - `TERMS_OF_SERVICE_URL` (optional)
 - `VANGUARD_DATA_DIR` (default: `./data`)
+
+## Hosted-Only Hardening
+
+Use these controls if you want users to consume your hosted bot instead of self-hosting forks:
+
+- Put your backend behind `VANGUARD_BACKEND_API_KEY` so cloned bots cannot call private AI/moderation services.
+- Set `VANGUARD_ALLOWED_GUILD_IDS` so this bot instance only runs in your approved servers.
+- Enable `VANGUARD_REQUIRE_LICENSE=true` and configure `VANGUARD_LICENSE_VERIFY_URL` for a remote kill switch.
 
 ## Data Storage
 

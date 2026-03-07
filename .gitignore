@@ -24,5 +24,9 @@ env/
 # Runtime state
 data/*.json
 !data/.gitkeep
+settings.json
+votes.json
+reminders.json
+modlog.json
 tmp/
 output/

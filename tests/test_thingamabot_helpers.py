@@ -95,3 +95,33 @@ def test_build_ai_session_id_is_stable(monkeypatch, tmp_path):
 
     assert bot._build_ai_session_id(123, 456, 789) == "discord:123:456:789"
     assert bot._build_ai_session_id(None, 456, 789) == "discord:dm:456:789"
+
+
+def test_build_backend_headers_uses_configured_secrets(monkeypatch, tmp_path):
+    monkeypatch.setenv("VANGUARD_BACKEND_API_KEY", "secret")
+    monkeypatch.setenv("VANGUARD_INSTANCE_ID", "instance-1")
+
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+    headers = bot.build_backend_headers()
+
+    assert headers["X-Vanguard-Api-Key"] == "secret"
+    assert headers["X-Vanguard-Instance-Id"] == "instance-1"
+
+
+def test_parse_allowed_guild_ids_skips_invalid_values(monkeypatch, tmp_path):
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    parsed = bot.parse_allowed_guild_ids(["123", "abc", -5, 456, None])
+    assert parsed == {123, 456}
+
+
+def test_verify_license_requires_verify_url_when_enforced(monkeypatch, tmp_path):
+    monkeypatch.setenv("VANGUARD_REQUIRE_LICENSE", "true")
+    monkeypatch.delenv("VANGUARD_LICENSE_VERIFY_URL", raising=False)
+
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+    authorized, reason, allowed = bot.verify_license_sync(bot_user_id=None, guild_count=0)
+
+    assert authorized is False
+    assert "not configured" in reason
+    assert allowed == set()

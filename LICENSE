@@ -1,0 +1,40 @@
+Vanguard Proprietary Source-Available License v1.0
+
+Copyright (c) 2026 Continental
+All rights reserved.
+
+1. Scope
+This repository is made publicly visible for transparency and collaboration with
+the project owner. Public availability does not grant permission to use this
+code outside the rights explicitly granted below.
+
+2. Limited Permission
+You may view this source code for personal, non-commercial reference only.
+
+3. Restrictions
+Without prior written permission from the copyright owner, you may not:
+- copy, reproduce, modify, adapt, or create derivative works from this code;
+- redistribute, publish, sublicense, or sell this code or derivatives;
+- self-host, deploy, operate, or provide this bot/service from this code;
+- use this code to build a competing bot or service with materially similar
+  features;
+- remove or alter copyright, attribution, or legal notices.
+
+4. No Trademark Rights
+No right to use names, logos, branding, or marks (including "Vanguard" and
+"Continental") is granted by this license.
+
+5. Termination
+Any violation of these terms automatically terminates all permissions under this
+license.
+
+6. Enforcement
+Unauthorized use may result in license revocation, service denial, and legal
+action, including takedown requests where applicable.
+
+7. Commercial Licensing
+For commercial or deployment rights, contact:
+Charlemagne@continental-hub.com
+
+8. Disclaimer
+The code is provided "as is", without warranties of any kind.

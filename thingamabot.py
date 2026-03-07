@@ -1,7 +1,11 @@
+# Copyright (c) 2026 Continental. All rights reserved.
+# Licensed under the Vanguard Proprietary Source-Available License (see /LICENSE).
+
 import asyncio
 from collections import defaultdict, deque
 import json
 import os
+import platform
 import random
 import re
 import traceback
@@ -88,6 +92,22 @@ def _parse_env_optional_float(
     if maximum is not None and value > maximum:
         return None
     return value
+
+
+def _parse_env_int_set(name: str) -> set[int]:
+    raw = os.getenv(name, "")
+    values: set[int] = set()
+    for chunk in raw.split(","):
+        token = chunk.strip()
+        if not token:
+            continue
+        try:
+            parsed = int(token)
+        except ValueError:
+            continue
+        if parsed > 0:
+            values.add(parsed)
+    return values
 
 
 def _resolve_ai_base_url(explicit_base_url: str, legacy_url: str) -> str:
@@ -184,6 +204,26 @@ AI_NUM_PREDICT = _parse_env_optional_int("AI_NUM_PREDICT", minimum=1, maximum=40
 AI_REPEAT_PENALTY = _parse_env_optional_float("AI_REPEAT_PENALTY", minimum=0.8, maximum=2.0)
 FLAG_USER_URL = os.getenv("FLAG_USER_URL", "http://localhost:3001/fuck")
 UNFLAG_USER_URL = os.getenv("UNFLAG_USER_URL", "http://localhost:3001/unfuck")
+VANGUARD_INSTANCE_ID = os.getenv("VANGUARD_INSTANCE_ID", "").strip()
+VANGUARD_BACKEND_API_KEY = os.getenv("VANGUARD_BACKEND_API_KEY", "").strip()
+VANGUARD_BACKEND_KEY_HEADER = (
+    os.getenv("VANGUARD_BACKEND_KEY_HEADER", "X-Vanguard-Api-Key").strip()
+    or "X-Vanguard-Api-Key"
+)
+VANGUARD_INSTANCE_HEADER = (
+    os.getenv("VANGUARD_INSTANCE_HEADER", "X-Vanguard-Instance-Id").strip()
+    or "X-Vanguard-Instance-Id"
+)
+VANGUARD_ALLOWED_GUILD_IDS = _parse_env_int_set("VANGUARD_ALLOWED_GUILD_IDS")
+VANGUARD_LICENSE_VERIFY_URL = os.getenv("VANGUARD_LICENSE_VERIFY_URL", "").strip()
+VANGUARD_LICENSE_KEY = os.getenv("VANGUARD_LICENSE_KEY", "").strip()
+VANGUARD_REQUIRE_LICENSE = _parse_env_bool("VANGUARD_REQUIRE_LICENSE", False)
+VANGUARD_LICENSE_RECHECK_SECONDS = _parse_env_int(
+    "VANGUARD_LICENSE_RECHECK_SECONDS",
+    900,
+    minimum=60,
+    maximum=86400,
+)
 MC_DEFAULT_HOST = os.getenv("MC_DEFAULT_HOST")
 try:
     MC_DEFAULT_PORT = int(os.getenv("MC_DEFAULT_PORT", "25565"))
@@ -819,6 +859,139 @@ def get_active_prefix(guild: discord.Guild | None) -> str:
     return BOT_PREFIX
 
 
+def build_backend_headers(include_license: bool = False) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    if VANGUARD_BACKEND_API_KEY:
+        headers[VANGUARD_BACKEND_KEY_HEADER] = VANGUARD_BACKEND_API_KEY
+    if VANGUARD_INSTANCE_ID:
+        headers[VANGUARD_INSTANCE_HEADER] = VANGUARD_INSTANCE_ID
+    if include_license and VANGUARD_LICENSE_KEY:
+        headers["Authorization"] = f"Bearer {VANGUARD_LICENSE_KEY}"
+    return headers
+
+
+def parse_allowed_guild_ids(value: Any) -> set[int]:
+    if not isinstance(value, list):
+        return set()
+    parsed: set[int] = set()
+    for item in value:
+        try:
+            guild_id = int(item)
+        except (TypeError, ValueError):
+            continue
+        if guild_id > 0:
+            parsed.add(guild_id)
+    return parsed
+
+
+def get_effective_allowed_guild_ids() -> set[int]:
+    allowed = set(VANGUARD_ALLOWED_GUILD_IDS)
+    allowed.update(license_allowed_guild_ids)
+    return allowed
+
+
+def is_guild_authorized(guild_id: int | None) -> bool:
+    if guild_id is None:
+        return True
+    allowed = get_effective_allowed_guild_ids()
+    if not allowed:
+        return True
+    return guild_id in allowed
+
+
+def get_access_block_reason() -> str | None:
+    if VANGUARD_REQUIRE_LICENSE and not license_authorized:
+        return license_reason or "license verification failed"
+    return None
+
+
+def verify_license_sync(
+    bot_user_id: int | None,
+    guild_count: int,
+) -> tuple[bool, str, set[int]]:
+    if not VANGUARD_LICENSE_VERIFY_URL:
+        if VANGUARD_REQUIRE_LICENSE:
+            return False, "VANGUARD_LICENSE_VERIFY_URL is not configured.", set()
+        return True, "license checks disabled", set()
+
+    payload = {
+        "instanceId": VANGUARD_INSTANCE_ID or platform.node() or "vanguard-instance",
+        "botUserId": str(bot_user_id or ""),
+        "guildCount": guild_count,
+    }
+    headers = build_backend_headers(include_license=True)
+
+    response = requests.post(
+        VANGUARD_LICENSE_VERIFY_URL,
+        json=payload,
+        headers=headers or None,
+        timeout=8,
+    )
+    if response.status_code != 200:
+        return False, f"license endpoint returned HTTP {response.status_code}", set()
+
+    try:
+        body = response.json()
+    except ValueError:
+        return False, "license endpoint returned non-JSON response", set()
+    if not isinstance(body, dict):
+        return False, "license endpoint returned malformed response", set()
+
+    authorized = bool(body.get("authorized", False))
+    reason = str(body.get("reason") or ("authorized" if authorized else "unauthorized"))
+    allowed_ids = parse_allowed_guild_ids(
+        body.get("allowedGuildIds", body.get("allowed_guild_ids"))
+    )
+    return authorized, reason[:240], allowed_ids
+
+
+async def refresh_license_state() -> None:
+    global license_authorized, license_reason, license_allowed_guild_ids, license_last_checked_at
+    try:
+        authorized, reason, allowed_ids = await asyncio.to_thread(
+            verify_license_sync,
+            bot.user.id if bot.user else None,
+            len(bot.guilds),
+        )
+    except requests.exceptions.RequestException as exc:
+        authorized, reason, allowed_ids = False, f"license request error: {exc}", set()
+    except Exception as exc:
+        authorized, reason, allowed_ids = False, f"license check error: {exc}", set()
+
+    if VANGUARD_REQUIRE_LICENSE:
+        license_authorized = authorized
+    else:
+        license_authorized = True
+
+    license_reason = reason
+    license_allowed_guild_ids = allowed_ids
+    license_last_checked_at = datetime.now(timezone.utc)
+
+
+async def enforce_guild_allowlist() -> None:
+    for guild in list(bot.guilds):
+        if is_guild_authorized(guild.id):
+            continue
+        try:
+            await guild.leave()
+            print(f"[ACCESS] Left unauthorized guild {guild.id} ({guild.name})")
+        except Exception as exc:
+            print(f"[ACCESS] Failed leaving unauthorized guild {guild.id}: {exc}")
+
+
+async def license_worker() -> None:
+    while not bot.is_closed():
+        await asyncio.sleep(VANGUARD_LICENSE_RECHECK_SECONDS)
+        try:
+            await refresh_license_state()
+            await enforce_guild_allowlist()
+            reason = get_access_block_reason()
+            if reason:
+                print(f"[ACCESS] Commands blocked: {reason}")
+        except Exception as exc:
+            print(f"[ACCESS] License worker error: {exc}")
+
+
 def dynamic_prefix(bot_instance: commands.Bot, message: discord.Message):
     return commands.when_mentioned_or(get_active_prefix(message.guild))(bot_instance, message)
 
@@ -835,11 +1008,13 @@ async def send_backend_user_update(
         return
 
     payload = {"userId": user_id}
+    backend_headers = build_backend_headers()
     try:
         response = await asyncio.to_thread(
             requests.post,
             endpoint,
             json=payload,
+            headers=backend_headers or None,
             timeout=6,
         )
     except requests.exceptions.RequestException as exc:
@@ -1086,6 +1261,11 @@ setup_vote_module(bot)
 
 startup_initialized = False
 reminder_loop_task: asyncio.Task | None = None
+license_loop_task: asyncio.Task | None = None
+license_authorized = not VANGUARD_REQUIRE_LICENSE
+license_reason = "license checks disabled"
+license_allowed_guild_ids: set[int] = set()
+license_last_checked_at: datetime | None = None
 
 
 @bot.check
@@ -1095,9 +1275,21 @@ async def global_owner_check(ctx: commands.Context) -> bool:
     return await bot.is_owner(ctx.author)
 
 
+@bot.check
+async def global_access_policy_check(ctx: commands.Context) -> bool:
+    block_reason = get_access_block_reason()
+    if block_reason:
+        await safe_ctx_send(ctx, f"⛔ This Vanguard instance is not authorized: {block_reason}")
+        return False
+    if ctx.guild and not is_guild_authorized(ctx.guild.id):
+        await safe_ctx_send(ctx, "⛔ This server is not authorized to use this Vanguard instance.")
+        return False
+    return True
+
+
 @bot.event
 async def on_ready():
-    global startup_initialized, reminder_loop_task
+    global startup_initialized, reminder_loop_task, license_loop_task
     if bot.user is not None:
         print(f"[READY] Logged in as {bot.user} ({bot.user.id}) in {len(bot.guilds)} guild(s)")
     else:
@@ -1105,6 +1297,12 @@ async def on_ready():
 
     if startup_initialized:
         return
+
+    await refresh_license_state()
+    block_reason = get_access_block_reason()
+    if block_reason:
+        print(f"[ACCESS] Commands blocked: {block_reason}")
+    await enforce_guild_allowlist()
 
     try:
         await restore_vote_state(bot)
@@ -1128,8 +1326,25 @@ async def on_ready():
 
     if reminder_loop_task is None or reminder_loop_task.done():
         reminder_loop_task = asyncio.create_task(reminder_worker())
+    if (
+        VANGUARD_LICENSE_VERIFY_URL
+        or VANGUARD_REQUIRE_LICENSE
+        or VANGUARD_ALLOWED_GUILD_IDS
+    ) and (license_loop_task is None or license_loop_task.done()):
+        license_loop_task = asyncio.create_task(license_worker())
 
     startup_initialized = True
+
+
+@bot.event
+async def on_guild_join(guild: discord.Guild):
+    if is_guild_authorized(guild.id):
+        return
+    try:
+        await guild.leave()
+        print(f"[ACCESS] Left unauthorized guild on join: {guild.id} ({guild.name})")
+    except Exception as exc:
+        print(f"[ACCESS] Failed leaving unauthorized guild on join {guild.id}: {exc}")
 
 
 @bot.event
@@ -1163,6 +1378,8 @@ async def on_member_join(member: discord.Member):
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
+        return
+    if message.guild and not is_guild_authorized(message.guild.id):
         return
 
     if isinstance(message.author, discord.Member) and message.guild:
@@ -1605,9 +1822,15 @@ async def health(ctx: commands.Context):
 
     ai_status = "DISABLED"
     model_status = "N/A"
+    backend_headers = build_backend_headers()
     if AI_HEALTH_URL:
         try:
-            response = await asyncio.to_thread(requests.get, AI_HEALTH_URL, timeout=4)
+            response = await asyncio.to_thread(
+                requests.get,
+                AI_HEALTH_URL,
+                headers=backend_headers or None,
+                timeout=4,
+            )
             if response.status_code == 200:
                 ai_status = "OK"
                 try:
@@ -1624,7 +1847,12 @@ async def health(ctx: commands.Context):
             ai_status = "UNREACHABLE"
 
         try:
-            model_response = await asyncio.to_thread(requests.get, AI_MODELS_URL, timeout=4)
+            model_response = await asyncio.to_thread(
+                requests.get,
+                AI_MODELS_URL,
+                headers=backend_headers or None,
+                timeout=4,
+            )
             if model_response.status_code == 200:
                 try:
                     model_payload = model_response.json()
@@ -1639,6 +1867,16 @@ async def health(ctx: commands.Context):
 
     checks.append(("AI Backend", ai_status))
     checks.append(("AI Models", model_status))
+    if VANGUARD_REQUIRE_LICENSE:
+        license_status = "OK" if license_authorized else f"BLOCKED ({license_reason})"
+    elif VANGUARD_LICENSE_VERIFY_URL:
+        license_status = f"MONITOR ({license_reason})"
+    else:
+        license_status = "DISABLED"
+    allowlist = get_effective_allowed_guild_ids()
+    allowlist_status = f"{len(allowlist)} guild(s)" if allowlist else "OFF"
+    checks.append(("License Gate", license_status))
+    checks.append(("Guild Allowlist", allowlist_status))
 
     embed = discord.Embed(title="Vanguard Health", color=discord.Color.red())
     for key, value in checks:
@@ -2218,6 +2456,7 @@ async def undo(ctx: commands.Context, case_id: int):
 async def vanguard(ctx: commands.Context, *, question: str):
     """Ask the AI server and keep channel-local memory for follow-up questions."""
     async with ctx.typing():
+        backend_headers = build_backend_headers()
         ask_payload = {
             "question": question,
             "username": str(ctx.author),
@@ -2253,6 +2492,7 @@ async def vanguard(ctx: commands.Context, *, question: str):
                 requests.post,
                 AI_CHAT_URL,
                 json=chat_payload,
+                headers=backend_headers or None,
                 timeout=AI_REQUEST_TIMEOUT_SECONDS,
             )
             if chat_response.status_code == 200:
@@ -2270,6 +2510,7 @@ async def vanguard(ctx: commands.Context, *, question: str):
                     requests.post,
                     AI_ASK_URL,
                     json=ask_payload,
+                    headers=backend_headers or None,
                     timeout=AI_REQUEST_TIMEOUT_SECONDS,
                 )
                 if response.status_code == 200:
@@ -2310,8 +2551,14 @@ async def vanguardreset(ctx: commands.Context):
         ctx.author.id,
     )
     delete_url = f"{AI_SESSION_URL}/{quote(session_id, safe='')}"
+    backend_headers = build_backend_headers()
     try:
-        response = await asyncio.to_thread(requests.delete, delete_url, timeout=AI_REQUEST_TIMEOUT_SECONDS)
+        response = await asyncio.to_thread(
+            requests.delete,
+            delete_url,
+            headers=backend_headers or None,
+            timeout=AI_REQUEST_TIMEOUT_SECONDS,
+        )
         if response.status_code in {200, 204, 404}:
             await ctx.send("✅ AI session memory reset for this channel.")
         else:

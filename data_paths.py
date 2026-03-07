@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Continental. All rights reserved.
+# Licensed under the Vanguard Proprietary Source-Available License (see /LICENSE).
+
 import os
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

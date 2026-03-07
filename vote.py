@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Continental. All rights reserved.
+# Licensed under the Vanguard Proprietary Source-Available License (see /LICENSE).
+
 # vote.py
 import discord
 from discord.ext import commands

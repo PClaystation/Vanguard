@@ -1,6 +1,6 @@
 # Privacy Policy
 
-Last updated: March 5, 2026
+Last updated: March 7, 2026
 
 This Privacy Policy explains how the Vanguard bot ("Bot", "we", "us", "our") collects, uses, stores, and deletes information when used in Discord servers or direct messages.
 
@@ -19,6 +19,7 @@ Depending on which commands and features are used, we may process:
 - Vote feature data (for example: vote ID, voter ID, vote choice, target ID, timing metadata).
 - Configuration data set by server staff (for example: prefix, welcome settings, moderation role IDs).
 - Service logs and error traces needed to troubleshoot reliability and abuse.
+- Access-control and enforcement telemetry (for example: license check status, instance ID, and authorization outcomes) used to prevent unauthorized cloning, abuse, or service impersonation.
 
 If AI features are enabled, command content and user identifiers required for that feature may be sent to the configured AI endpoint.
 
@@ -31,6 +32,7 @@ We use data to:
 - Process reminders and vote workflows.
 - Enforce moderation and anti-abuse controls.
 - Maintain service security, integrity, and reliability.
+- Detect and respond to unauthorized service operation, cloning attempts, and terms violations.
 
 We do not sell personal data.
 
@@ -51,6 +53,7 @@ We may share data only with:
 - Infrastructure/service providers necessary to host and run the Bot.
 - AI or backend providers explicitly configured to support enabled Bot features.
 - Authorities when required by applicable law.
+- Legal/abuse response providers when needed to enforce terms or protect intellectual property.
 
 We do not share API data with third parties except as necessary to operate the Bot, comply with law, or when a user/server explicitly directs such sharing.
 
@@ -68,6 +71,8 @@ Data may be deleted sooner on valid request unless retention is legally required
 ## 7. Security
 
 We apply reasonable technical and organizational safeguards to protect data. No method of storage or transmission is completely secure, and absolute security cannot be guaranteed.
+
+We may use security controls (including access keys, allowlists, and verification checks) to protect service integrity and intellectual property.
 
 ## 8. Your Rights and Choices
 
@@ -98,4 +103,3 @@ We may update this policy periodically. The "Last updated" date reflects the lat
 For privacy questions:
 
 - Email: `Charlemagne@continental-hub.com`
-
