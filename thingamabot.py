@@ -1495,7 +1495,7 @@ async def safe_ctx_send(ctx: commands.Context, *args: Any, **kwargs: Any):
     try:
         return await ctx.send(*args, **kwargs)
     except discord.NotFound:
-        # Interaction responses can expire on long-running slash/hybrid commands.
+        # Interaction responses can expire on long-running slash commands.
         channel = getattr(ctx, "channel", None)
         if channel is None or not hasattr(channel, "send"):
             return None
@@ -1505,6 +1505,52 @@ async def safe_ctx_send(ctx: commands.Context, *args: Any, **kwargs: Any):
             return await channel.send(*args, **fallback_kwargs)
         except Exception:
             return None
+
+
+def _user_cooldown_key(interaction: discord.Interaction) -> int:
+    return interaction.user.id
+
+
+async def _owner_app_command(interaction: discord.Interaction) -> bool:
+    if await bot.is_owner(interaction.user):
+        return True
+    raise app_commands.CheckFailure("⛔ This command is owner-only.")
+
+
+def _find_app_command(command_name: str):
+    token = command_name.strip().lower()
+    for command in bot.tree.walk_commands(type=discord.AppCommandType.chat_input):
+        if command.qualified_name.lower() == token or command.name.lower() == token:
+            return command
+    return None
+
+
+def _format_app_command_usage(command) -> str:
+    parts = []
+    for parameter in getattr(command, "parameters", []):
+        display_name = getattr(parameter, "display_name", parameter.name)
+        parts.append(f"<{display_name}>" if parameter.required else f"[{display_name}]")
+    suffix = f" {' '.join(parts)}" if parts else ""
+    return f"/{command.qualified_name}{suffix}"
+
+
+class VanguardCommandTree(app_commands.CommandTree):
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if settings.get("owner_only", False) and not await bot.is_owner(interaction.user):
+            raise app_commands.CheckFailure("⛔ This Vanguard instance is currently owner-only.")
+
+        block_reason = get_access_block_reason()
+        if block_reason:
+            raise app_commands.CheckFailure(
+                f"⛔ This Vanguard instance is not authorized: {block_reason}"
+            )
+
+        if interaction.guild_id and not is_guild_authorized(interaction.guild_id):
+            raise app_commands.CheckFailure(
+                "⛔ This server is not authorized to use this Vanguard instance."
+            )
+
+        return True
 
 
 async def reminder_worker() -> None:
@@ -1524,6 +1570,7 @@ intents.members = True
 
 bot = commands.Bot(
     command_prefix=disabled_message_prefix,
+    tree_cls=VanguardCommandTree,
     intents=intents,
     help_command=None,
     case_insensitive=True,
@@ -1796,7 +1843,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
     elif isinstance(error, app_commands.CommandOnCooldown):
         message = f"⏳ Slow down. Try again in `{error.retry_after:.1f}` seconds."
     elif isinstance(error, app_commands.CheckFailure):
-        message = "⛔ You do not have permission to run this command."
+        message = str(error) or "⛔ You do not have permission to run this command."
     elif isinstance(error, app_commands.TransformerError):
         if is_channel_transform_error(error):
             message = "⚠️ Invalid channel type for that option. Choose a normal text channel."
@@ -1822,21 +1869,23 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         traceback.print_exception(type(error), error, error.__traceback__)
 
 
-@bot.hybrid_command(name="help")
+@bot.tree.command(name="help")
 async def help_command(ctx: commands.Context, *, command_name: str | None = None):
     """Show help for all commands or a specific command."""
+    ctx = await commands.Context.from_interaction(ctx)
     if command_name:
-        command = bot.get_command(command_name.lower())
-        if command is None or command.hidden:
+        command = _find_app_command(command_name)
+        if command is None:
             await ctx.send("❌ Command not found.")
             return
 
-        usage = f"/{command.qualified_name} {command.signature}".strip()
         embed = discord.Embed(title=f"Help: {command.qualified_name}", color=discord.Color.red())
-        embed.add_field(name="Description", value=command.help or "No description.", inline=False)
-        embed.add_field(name="Usage", value=f"`{usage}`", inline=False)
-        if command.aliases:
-            embed.add_field(name="Aliases", value=", ".join(f"`{alias}`" for alias in command.aliases), inline=False)
+        embed.add_field(
+            name="Description",
+            value=getattr(command, "description", "") or "No description.",
+            inline=False,
+        )
+        embed.add_field(name="Usage", value=f"`{_format_app_command_usage(command)}`", inline=False)
         await ctx.send(embed=embed)
         return
 
@@ -1887,9 +1936,10 @@ async def help_command(ctx: commands.Context, *, command_name: str | None = None
     )
     await ctx.send(embed=embed)
 
-@bot.hybrid_command(name="setlogchannel")
+@bot.tree.command(name="setlogchannel")
 async def setlogchannel(ctx: commands.Context, channel: ConfigChannelInput | None = None):
     """Set moderation log channel. Omit to clear."""
+    ctx = await commands.Context.from_interaction(ctx)
     result = await require_mod_context(ctx)
     if not result:
         return
@@ -1911,9 +1961,10 @@ async def setlogchannel(ctx: commands.Context, channel: ConfigChannelInput | Non
     )
 
 
-@bot.hybrid_command(name="setopschannel")
+@bot.tree.command(name="setopschannel")
 async def setopschannel(ctx: commands.Context, channel: ConfigChannelInput | None = None):
     """Set ops/alerts channel. Omit to clear."""
+    ctx = await commands.Context.from_interaction(ctx)
     result = await require_mod_context(ctx)
     if not result:
         return
@@ -1935,9 +1986,10 @@ async def setopschannel(ctx: commands.Context, channel: ConfigChannelInput | Non
     )
 
 
-@bot.hybrid_command(name="ops")
+@bot.tree.command(name="ops")
 async def ops(ctx: commands.Context):
     """Operational intelligence summary for this server."""
+    ctx = await commands.Context.from_interaction(ctx)
     result = await require_guild_context(ctx)
     if not result:
         return
@@ -1984,9 +2036,10 @@ async def ops(ctx: commands.Context):
                 pass
 
 
-@bot.hybrid_command(name="status")
+@bot.tree.command(name="status")
 async def status(ctx: commands.Context):
     """Runtime status, dependency checks, and key bot metrics."""
+    ctx = await commands.Context.from_interaction(ctx)
     checks: list[tuple[str, str]] = []
     checks.append(("Discord", "OK"))
     checks.append(("Latency", f"{round(bot.latency * 1000)}ms"))
@@ -2097,9 +2150,10 @@ async def status(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 
-@bot.hybrid_command(name="privacy")
+@bot.tree.command(name="privacy")
 async def privacy(ctx: commands.Context):
     """Show data handling summary and Privacy Policy link."""
+    ctx = await commands.Context.from_interaction(ctx)
     summary = (
         "I store server config, moderation cases, reminders, and vote state to operate features. "
         "Use `/tos` for terms."
@@ -2110,18 +2164,20 @@ async def privacy(ctx: commands.Context):
         await ctx.send(f"{summary}\nPrivacy policy link not configured. Set `PRIVACY_POLICY_URL` in `.env`.")
 
 
-@bot.hybrid_command(name="tos")
+@bot.tree.command(name="tos")
 async def tos(ctx: commands.Context):
     """Show Terms of Service link."""
+    ctx = await commands.Context.from_interaction(ctx)
     if TOS_URL:
         await ctx.send(f"Terms of Service: {TOS_URL}")
     else:
         await ctx.send("ToS link not configured. Set `TERMS_OF_SERVICE_URL` in `.env`.")
 
 
-@bot.hybrid_command(name="controlcenter")
+@bot.tree.command(name="controlcenter")
 async def controlcenter(ctx: commands.Context):
     """Show the configured control center URL for moderators."""
+    ctx = await commands.Context.from_interaction(ctx)
     result = await require_mod_context(ctx)
     if not result:
         return
@@ -2145,9 +2201,10 @@ async def controlcenter(ctx: commands.Context):
     await ctx.send("\n".join(message))
 
 
-@bot.hybrid_command()
+@bot.tree.command()
 async def avatar(ctx: commands.Context, member: discord.Member | None = None):
     """Show a user's avatar."""
+    ctx = await commands.Context.from_interaction(ctx)
     target = member or ctx.author
     if not isinstance(target, (discord.Member, discord.User)):
         await ctx.send("❌ Could not resolve user.")
@@ -2157,9 +2214,10 @@ async def avatar(ctx: commands.Context, member: discord.Member | None = None):
     await ctx.send(embed=embed)
 
 
-@bot.hybrid_command()
+@bot.tree.command()
 async def userinfo(ctx: commands.Context, member: discord.Member | None = None):
     """Show information about a server member."""
+    ctx = await commands.Context.from_interaction(ctx)
     if ctx.guild is None:
         await ctx.send("⚠️ This command can only be used in a server.")
         return
@@ -2178,10 +2236,11 @@ async def userinfo(ctx: commands.Context, member: discord.Member | None = None):
     await ctx.send(embed=embed)
 
 
-@bot.hybrid_command(name="continentalid")
-@commands.cooldown(3, 30, commands.BucketType.user)
+@bot.tree.command(name="continentalid")
+@app_commands.checks.cooldown(3, 30.0, key=_user_cooldown_key)
 async def continentalid(ctx: commands.Context, member: discord.Member | None = None):
     """Show Continental ID link status for yourself or, with Manage Server, another member."""
+    ctx = await commands.Context.from_interaction(ctx)
     target = member or ctx.author
     target_id = getattr(target, "id", None)
     if target_id is None:
@@ -2260,9 +2319,10 @@ async def continentalid(ctx: commands.Context, member: discord.Member | None = N
     await ctx.send(embed=embed)
 
 
-@bot.hybrid_command()
+@bot.tree.command()
 async def choose(ctx: commands.Context, *, options: str):
     """Choose randomly from options separated by |."""
+    ctx = await commands.Context.from_interaction(ctx)
     choices = [choice.strip() for choice in options.split("|") if choice.strip()]
     if len(choices) < 2:
         await ctx.send("⚠️ Provide at least 2 options separated by `|`.")
@@ -2270,9 +2330,10 @@ async def choose(ctx: commands.Context, *, options: str):
     await ctx.send(f"🎲 I choose: **{random.choice(choices)}**")
 
 
-@bot.hybrid_command()
+@bot.tree.command()
 async def roll(ctx: commands.Context, notation: str = "1d6"):
     """Roll dice using NdS notation, e.g. 2d20."""
+    ctx = await commands.Context.from_interaction(ctx)
     match = re.fullmatch(r"(\d{1,2})d(\d{1,4})", notation.lower().strip())
     if not match:
         await ctx.send("⚠️ Invalid format. Use `NdS`, for example `2d6` or `1d20`.")
@@ -2286,9 +2347,10 @@ async def roll(ctx: commands.Context, notation: str = "1d6"):
     await ctx.send(f"🎲 Rolled `{notation}`: {', '.join(map(str, rolls))} (total: **{sum(rolls)}**)")
 
 
-@bot.hybrid_command()
+@bot.tree.command()
 async def poll(ctx: commands.Context, *, content: str):
     """Create a poll. Format: question | option1 | option2 ... (or yes/no with question only)."""
+    ctx = await commands.Context.from_interaction(ctx)
     parts = [part.strip() for part in content.split("|") if part.strip()]
     if not parts:
         await ctx.send("⚠️ Provide a poll question.")
@@ -2318,9 +2380,10 @@ async def poll(ctx: commands.Context, *, content: str):
         await message.add_reaction(number_emojis[i])
 
 
-@bot.hybrid_command()
+@bot.tree.command()
 async def remindme(ctx: commands.Context, duration: str, *, message: str):
     """Create a reminder. Example: /remindme 2h30m stretch."""
+    ctx = await commands.Context.from_interaction(ctx)
     seconds = parse_duration_to_seconds(duration)
     if seconds is None or seconds <= 0:
         await ctx.send("⚠️ Invalid duration. Example: `10m`, `2h30m`, `1d`.")
@@ -2353,9 +2416,10 @@ async def remindme(ctx: commands.Context, duration: str, *, message: str):
     )
 
 
-@bot.hybrid_command(name="reminders")
+@bot.tree.command(name="reminders")
 async def list_reminders(ctx: commands.Context):
     """List your active reminders."""
+    ctx = await commands.Context.from_interaction(ctx)
     mine = [reminder for reminder in reminders if reminder["user_id"] == ctx.author.id]
     if not mine:
         await ctx.send("You have no active reminders.")
@@ -2372,9 +2436,10 @@ async def list_reminders(ctx: commands.Context):
     await send_chunked_message(ctx, "**Your reminders:**\n" + "\n".join(lines))
 
 
-@bot.hybrid_command(name="cancelreminder")
+@bot.tree.command(name="cancelreminder")
 async def cancel_reminder(ctx: commands.Context, reminder_id: int):
     """Cancel one of your reminders by ID."""
+    ctx = await commands.Context.from_interaction(ctx)
     global reminders
     before_count = len(reminders)
     reminders = [
@@ -2389,10 +2454,11 @@ async def cancel_reminder(ctx: commands.Context, reminder_id: int):
     await ctx.send(f"✅ Reminder `{reminder_id}` canceled.")
 
 
-@bot.hybrid_command()
-@commands.has_permissions(manage_messages=True)
+@bot.tree.command()
+@app_commands.checks.has_permissions(manage_messages=True)
 async def purge(ctx: commands.Context, amount: int):
     """Delete recent messages in the current channel."""
+    ctx = await commands.Context.from_interaction(ctx)
     if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
         await ctx.send("⚠️ This command can only be used in a text channel.")
         return
@@ -2432,10 +2498,11 @@ async def purge(ctx: commands.Context, amount: int):
         pass
 
 
-@bot.hybrid_command()
-@commands.has_permissions(manage_channels=True)
+@bot.tree.command()
+@app_commands.checks.has_permissions(manage_channels=True)
 async def slowmode(ctx: commands.Context, seconds: int):
     """Set channel slowmode in seconds (0 disables)."""
+    ctx = await commands.Context.from_interaction(ctx)
     if ctx.guild is None or not isinstance(ctx.channel, discord.TextChannel):
         await ctx.send("⚠️ This command can only be used in a text channel.")
         return
@@ -2461,10 +2528,11 @@ async def slowmode(ctx: commands.Context, seconds: int):
     await ctx.send(f"✅ Slowmode set to `{seconds}` second(s).")
 
 
-@bot.hybrid_command()
-@commands.has_permissions(manage_nicknames=True)
+@bot.tree.command()
+@app_commands.checks.has_permissions(manage_nicknames=True)
 async def nick(ctx: commands.Context, member: discord.Member, *, nickname: str | None = None):
     """Change or clear a member nickname."""
+    ctx = await commands.Context.from_interaction(ctx)
     if ctx.guild is None:
         await ctx.send("⚠️ This command can only be used in a server.")
         return
@@ -2507,10 +2575,11 @@ async def nick(ctx: commands.Context, member: discord.Member, *, nickname: str |
         await ctx.send(f"✅ Cleared nickname for {member.mention}.")
 
 
-@bot.hybrid_command()
-@commands.has_permissions(moderate_members=True)
+@bot.tree.command()
+@app_commands.checks.has_permissions(moderate_members=True)
 async def timeout(ctx: commands.Context, member: discord.Member, duration: str, *, reason: str | None = None):
     """Timeout a member. Example: /timeout @user 30m spam"""
+    ctx = await commands.Context.from_interaction(ctx)
     if ctx.guild is None:
         await ctx.send("⚠️ This command can only be used in a server.")
         return
@@ -2565,10 +2634,11 @@ async def timeout(ctx: commands.Context, member: discord.Member, duration: str, 
     )
 
 
-@bot.hybrid_command()
-@commands.has_permissions(moderate_members=True)
+@bot.tree.command()
+@app_commands.checks.has_permissions(moderate_members=True)
 async def untimeout(ctx: commands.Context, member: discord.Member, *, reason: str | None = None):
     """Remove a member timeout."""
+    ctx = await commands.Context.from_interaction(ctx)
     if ctx.guild is None:
         await ctx.send("⚠️ This command can only be used in a server.")
         return
@@ -2608,10 +2678,11 @@ async def untimeout(ctx: commands.Context, member: discord.Member, *, reason: st
     await ctx.send(f"✅ Timeout removed for {member.mention}.")
 
 
-@bot.hybrid_command()
-@commands.has_permissions(moderate_members=True)
+@bot.tree.command()
+@app_commands.checks.has_permissions(moderate_members=True)
 async def warn(ctx: commands.Context, member: discord.Member, *, reason: str):
     """Issue a warning and record a moderation case."""
+    ctx = await commands.Context.from_interaction(ctx)
     if ctx.guild is None:
         await ctx.send("⚠️ This command can only be used in a server.")
         return
@@ -2637,10 +2708,11 @@ async def warn(ctx: commands.Context, member: discord.Member, *, reason: str):
     await ctx.send(f"⚠️ {member.mention} warned. Case `{case_id}`.")
 
 
-@bot.hybrid_command(name="cases")
-@commands.has_permissions(moderate_members=True)
+@bot.tree.command(name="cases")
+@app_commands.checks.has_permissions(moderate_members=True)
 async def cases(ctx: commands.Context, member: discord.Member | None = None, limit: int = 10):
     """List recent moderation cases, optionally filtered by member."""
+    ctx = await commands.Context.from_interaction(ctx)
     if ctx.guild is None:
         await ctx.send("⚠️ This command can only be used in a server.")
         return
@@ -2664,10 +2736,11 @@ async def cases(ctx: commands.Context, member: discord.Member | None = None, lim
     await send_chunked_message(ctx, "**Moderation cases:**\n" + "\n".join(lines))
 
 
-@bot.hybrid_command(name="undo")
-@commands.has_permissions(moderate_members=True)
+@bot.tree.command(name="undo")
+@app_commands.checks.has_permissions(moderate_members=True)
 async def undo(ctx: commands.Context, case_id: int):
     """Undo a supported moderation action by case ID."""
+    ctx = await commands.Context.from_interaction(ctx)
     if ctx.guild is None:
         await ctx.send("⚠️ This command can only be used in a server.")
         return
@@ -2742,10 +2815,11 @@ async def undo(ctx: commands.Context, case_id: int):
     await ctx.send(f"✅ Undid case `{case_id}` ({action}).")
 
 
-@bot.hybrid_command()
-@commands.cooldown(3, 30, commands.BucketType.user)
+@bot.tree.command()
+@app_commands.checks.cooldown(3, 30.0, key=_user_cooldown_key)
 async def vanguard(ctx: commands.Context, *, question: str):
     """Ask the AI server and keep channel-local memory for follow-up questions."""
+    ctx = await commands.Context.from_interaction(ctx)
     async with ctx.typing():
         backend_headers = build_backend_headers()
         ask_payload = {
@@ -2856,10 +2930,11 @@ async def vanguard(ctx: commands.Context, *, question: str):
     await ctx.send(embed=embed)
 
 
-@bot.hybrid_command(name="vanguardreset")
-@commands.cooldown(3, 30, commands.BucketType.user)
+@bot.tree.command(name="vanguardreset")
+@app_commands.checks.cooldown(3, 30.0, key=_user_cooldown_key)
 async def vanguardreset(ctx: commands.Context):
     """Clear your AI chat memory for this channel."""
+    ctx = await commands.Context.from_interaction(ctx)
     session_id = _build_ai_session_id(
         ctx.guild.id if ctx.guild else None,
         getattr(ctx.channel, "id", None),
@@ -2885,24 +2960,27 @@ async def vanguardreset(ctx: commands.Context):
         await ctx.send("⚠️ Unexpected error while resetting AI session memory.")
 
 
-@bot.hybrid_command(name="flaguser")
-@commands.is_owner()
+@bot.tree.command(name="flaguser")
+@app_commands.check(_owner_app_command)
 async def flaguser(ctx: commands.Context, target: str):
     """Owner-only: mark a user in backend moderation service."""
+    ctx = await commands.Context.from_interaction(ctx)
     await send_backend_user_update(ctx, target, FLAG_USER_URL, "has been flagged")
 
 
-@bot.hybrid_command(name="unflaguser")
-@commands.is_owner()
+@bot.tree.command(name="unflaguser")
+@app_commands.check(_owner_app_command)
 async def unflaguser(ctx: commands.Context, target: str):
     """Owner-only: remove a backend moderation flag for a user."""
+    ctx = await commands.Context.from_interaction(ctx)
     await send_backend_user_update(ctx, target, UNFLAG_USER_URL, "has been unflagged")
 
 
-@bot.hybrid_command()
-@commands.is_owner()
+@bot.tree.command()
+@app_commands.check(_owner_app_command)
 async def owneronly(ctx: commands.Context, state: str | None = None):
     """Owner-only: toggle global owner-only mode. Usage: /owneronly on|off"""
+    ctx = await commands.Context.from_interaction(ctx)
     if state is None:
         status = "ON" if settings.get("owner_only", False) else "OFF"
         await ctx.send(f"Owner-only mode is currently `{status}`.")
@@ -2921,8 +2999,9 @@ async def owneronly(ctx: commands.Context, state: str | None = None):
     await ctx.send(f"Owner-only mode set to `{'ON' if settings['owner_only'] else 'OFF'}`.")
 
 
-@bot.hybrid_command()
+@bot.tree.command()
 async def serverinfo(ctx: commands.Context):
+    ctx = await commands.Context.from_interaction(ctx)
     if ctx.guild is None:
         await ctx.send("⚠️ This command can only be used in a server.")
         return
@@ -2944,19 +3023,22 @@ async def serverinfo(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 
-@bot.hybrid_command()
+@bot.tree.command()
 async def lockdown(ctx: commands.Context):
+    ctx = await commands.Context.from_interaction(ctx)
     await set_lockdown_state(ctx, True)
 
 
-@bot.hybrid_command()
+@bot.tree.command()
 async def unlock(ctx: commands.Context):
+    ctx = await commands.Context.from_interaction(ctx)
     await set_lockdown_state(ctx, False)
 
 
-@bot.hybrid_command(name="setwelcomechannel")
+@bot.tree.command(name="setwelcomechannel")
 async def setwelcomechannel(ctx: commands.Context, channel: ConfigChannelInput | None = None):
     """Mod/admin: set welcome channel. Omit to clear."""
+    ctx = await commands.Context.from_interaction(ctx)
     result = await require_mod_context(ctx)
     if not result:
         return
@@ -2977,9 +3059,10 @@ async def setwelcomechannel(ctx: commands.Context, channel: ConfigChannelInput |
         await ctx.send("✅ Welcome channel cleared. System/default channel fallback will be used.")
 
 
-@bot.hybrid_command(name="setwelcomerole")
+@bot.tree.command(name="setwelcomerole")
 async def setwelcomerole(ctx: commands.Context, role: discord.Role | None = None):
     """Mod/admin: set role to auto-assign on join. Omit to clear."""
+    ctx = await commands.Context.from_interaction(ctx)
     result = await require_mod_context(ctx)
     if not result:
         return
@@ -2992,9 +3075,10 @@ async def setwelcomerole(ctx: commands.Context, role: discord.Role | None = None
         await ctx.send("✅ Welcome role cleared.")
 
 
-@bot.hybrid_command(name="setwelcomemessage")
+@bot.tree.command(name="setwelcomemessage")
 async def setwelcomemessage(ctx: commands.Context, *, message: str | None = None):
     """Mod/admin: set welcome message. Supports {user}, {username}, {server}. Use `clear` to reset."""
+    ctx = await commands.Context.from_interaction(ctx)
     result = await require_mod_context(ctx)
     if not result:
         return
@@ -3009,9 +3093,10 @@ async def setwelcomemessage(ctx: commands.Context, *, message: str | None = None
     await ctx.send("✅ Welcome message updated.")
 
 
-@bot.hybrid_command(name="setlockdownrole")
+@bot.tree.command(name="setlockdownrole")
 async def setlockdownrole(ctx: commands.Context, role: discord.Role | None = None):
     """Mod/admin: set role targeted by lockdown. Omit to use @everyone."""
+    ctx = await commands.Context.from_interaction(ctx)
     result = await require_mod_context(ctx)
     if not result:
         return
@@ -3026,9 +3111,10 @@ async def setlockdownrole(ctx: commands.Context, role: discord.Role | None = Non
         await ctx.send(f"✅ Lockdown role reset to default `{default_name}`.")
 
 
-@bot.hybrid_command(name="setmodroles")
+@bot.tree.command(name="setmodroles")
 async def setmodroles(ctx: commands.Context, roles: str | None = None):
     """Mod/admin: set additional roles allowed to run moderation/config commands."""
+    ctx = await commands.Context.from_interaction(ctx)
     result = await require_mod_context(ctx)
     if not result:
         return
@@ -3053,9 +3139,10 @@ async def setmodroles(ctx: commands.Context, roles: str | None = None):
     else:
         await ctx.send("✅ Mod role list cleared. Only Manage Server/Admin can run mod commands.")
 
-@bot.hybrid_command(name="showconfig")
+@bot.tree.command(name="showconfig")
 async def showconfig(ctx: commands.Context):
     """Show active configuration for this server."""
+    ctx = await commands.Context.from_interaction(ctx)
     result = await require_guild_context(ctx)
     if not result:
         return
@@ -3121,9 +3208,10 @@ async def showconfig(ctx: commands.Context):
     await ctx.send(embed=embed)
 
 
-@bot.hybrid_command(name="voteinfo")
+@bot.tree.command(name="voteinfo")
 async def voteinfo(ctx: commands.Context, vote_id: str):
     """Show detailed state for a specific vote."""
+    ctx = await commands.Context.from_interaction(ctx)
     result = await require_guild_context(ctx)
     if not result:
         return
@@ -3200,9 +3288,10 @@ async def voteinfo(ctx: commands.Context, vote_id: str):
     await send_chunked_message(ctx, "\n".join(header_lines))
 
 
-@bot.hybrid_command(name="activevotes")
+@bot.tree.command(name="activevotes")
 async def activevotes(ctx: commands.Context):
     """List active votes in this server."""
+    ctx = await commands.Context.from_interaction(ctx)
     result = await require_guild_context(ctx)
     if not result:
         return

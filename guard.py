@@ -1065,7 +1065,7 @@ def setup_guard_module(
     require_mod_context: RequireModContextCallback,
     save_settings: SaveSettingsCallback,
 ) -> None:
-    @bot.hybrid_command(name="guard")
+    @bot.tree.command(name="guard")
     async def guard(
         ctx: commands.Context,
         enabled: bool | None = None,
@@ -1079,6 +1079,7 @@ def setup_guard_module(
         timeout_seconds: int | None = None,
     ):
         """Configure anti-raid guard baseline settings and presets."""
+        ctx = await commands.Context.from_interaction(ctx)
         result = await require_mod_context(ctx)
         if not result:
             return
@@ -1114,7 +1115,7 @@ def setup_guard_module(
         save_settings()
         await ctx.send(_guard_summary(normalize_guard_settings(guild_cfg)))
 
-    @bot.hybrid_command(name="guardadvanced")
+    @bot.tree.command(name="guardadvanced")
     async def guardadvanced(
         ctx: commands.Context,
         join_threshold: int | None = None,
@@ -1136,6 +1137,7 @@ def setup_guard_module(
         delete_trigger_message: bool | None = None,
     ):
         """Tune advanced anti-raid detectors and mitigation behavior."""
+        ctx = await commands.Context.from_interaction(ctx)
         result = await require_mod_context(ctx)
         if not result:
             return
@@ -1180,9 +1182,10 @@ def setup_guard_module(
         save_settings()
         await ctx.send(_guard_advanced_summary(normalize_guard_settings(guild_cfg)))
 
-    @bot.hybrid_command(name="guardstatus")
+    @bot.tree.command(name="guardstatus")
     async def guardstatus(ctx: commands.Context):
         """Show guard configuration and current live detector metrics."""
+        ctx = await commands.Context.from_interaction(ctx)
         result = await require_mod_context(ctx)
         if not result:
             return
@@ -1251,9 +1254,10 @@ def setup_guard_module(
         )
         await ctx.send(embed=embed)
 
-    @bot.hybrid_command(name="guardreset")
+    @bot.tree.command(name="guardreset")
     async def guardreset(ctx: commands.Context):
         """Clear in-memory guard trackers and counters for this server."""
+        ctx = await commands.Context.from_interaction(ctx)
         result = await require_mod_context(ctx)
         if not result:
             return

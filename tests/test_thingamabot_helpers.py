@@ -157,6 +157,14 @@ def test_build_backend_headers_uses_configured_secrets(monkeypatch, tmp_path):
     assert headers["X-Vanguard-Instance-Id"] == "instance-1"
 
 
+def test_commands_are_registered_only_as_slash_commands(monkeypatch, tmp_path):
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    assert not bot.bot.commands
+    tree_commands = {command.name for command in bot.bot.tree.walk_commands()}
+    assert {"help", "status", "guard", "votecreate"}.issubset(tree_commands)
+
+
 def test_parse_allowed_guild_ids_skips_invalid_values(monkeypatch, tmp_path):
     bot, _ = load_thingamabot(monkeypatch, tmp_path)
 

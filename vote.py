@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 
 from data_paths import resolve_data_file
@@ -1880,10 +1881,10 @@ def setup_vote_module(
     ACTION_CALLBACKS["resolve_guard_preset_name"] = resolve_guard_preset_name
     ACTION_CALLBACKS["apply_guard_preset"] = apply_guard_preset
 
-    @bot.hybrid_command(name="votecreate")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    @commands.bot_has_permissions(send_messages=True, embed_links=True)
+    @bot.tree.command(name="votecreate")
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.bot_has_permissions(send_messages=True, embed_links=True)
     async def votecreate(
         ctx: commands.Context,
         title: str,
@@ -1903,6 +1904,7 @@ def setup_vote_module(
         mention_everyone: bool = False,
     ) -> None:
         """Create a configurable vote. For confidence votes, set vote_type=confidence and provide target."""
+        ctx = await commands.Context.from_interaction(ctx)
         guild = ctx.guild
         if not guild:
             await _send_ctx_message(ctx, "This command must be used in a server.")
@@ -2015,10 +2017,10 @@ def setup_vote_module(
             f"✅ Vote created in {target_channel.mention}. Vote ID: `{vote_id}`",
         )
 
-    @bot.hybrid_command(name="voteaction")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    @commands.bot_has_permissions(send_messages=True, embed_links=True)
+    @bot.tree.command(name="voteaction")
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.bot_has_permissions(send_messages=True, embed_links=True)
     async def voteaction(
         ctx: commands.Context,
         title: str,
@@ -2038,6 +2040,7 @@ def setup_vote_module(
         hide_live_results: bool = False,
     ) -> None:
         """Create a vote that automatically executes an action when it passes."""
+        ctx = await commands.Context.from_interaction(ctx)
         guild = ctx.guild
         if not guild:
             await _send_ctx_message(ctx, "This command must be used in a server.")
@@ -2157,10 +2160,10 @@ def setup_vote_module(
             ),
         )
 
-    @bot.hybrid_command(name="startelection")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
-    @commands.bot_has_permissions(send_messages=True, embed_links=True)
+    @bot.tree.command(name="startelection")
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(manage_guild=True)
+    @app_commands.checks.bot_has_permissions(send_messages=True, embed_links=True)
     async def startelection(
         ctx: commands.Context,
         title: str,
@@ -2177,6 +2180,7 @@ def setup_vote_module(
         channel: discord.TextChannel | None = None,
     ) -> None:
         """Start an election. Candidates format: @user1 | @user2 | Candidate 3."""
+        ctx = await commands.Context.from_interaction(ctx)
         guild = ctx.guild
         if not guild:
             await _send_ctx_message(ctx, "This command must be used in a server.")
@@ -2249,11 +2253,12 @@ def setup_vote_module(
             f"🏛️ Election started in {target_channel.mention}. Vote ID: `{vote_id}`",
         )
 
-    @bot.hybrid_command(name="voteclose")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
+    @bot.tree.command(name="voteclose")
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(manage_guild=True)
     async def voteclose(ctx: commands.Context, vote_id: str) -> None:
         """Close an active vote immediately by vote ID."""
+        ctx = await commands.Context.from_interaction(ctx)
         guild = ctx.guild
         if not guild:
             await _send_ctx_message(ctx, "This command must be used in a server.")
@@ -2271,11 +2276,12 @@ def setup_vote_module(
         await finish_vote(bot, vote_id)
         await _send_ctx_message(ctx, f"✅ Vote `{vote_id}` has been closed.")
 
-    @bot.hybrid_command(name="voteextend")
-    @commands.guild_only()
-    @commands.has_permissions(manage_guild=True)
+    @bot.tree.command(name="voteextend")
+    @app_commands.guild_only()
+    @app_commands.checks.has_permissions(manage_guild=True)
     async def voteextend(ctx: commands.Context, vote_id: str, extra_hours: int) -> None:
         """Extend an active vote by N hours."""
+        ctx = await commands.Context.from_interaction(ctx)
         guild = ctx.guild
         if not guild:
             await _send_ctx_message(ctx, "This command must be used in a server.")
@@ -2325,10 +2331,11 @@ def setup_vote_module(
             f"⏳ Extended `{vote_id}` by {extra_hours}h. New end: <t:{int(new_finish.timestamp())}:F>",
         )
 
-    @bot.hybrid_command(name="voteconfig")
-    @commands.guild_only()
+    @bot.tree.command(name="voteconfig")
+    @app_commands.guild_only()
     async def voteconfig(ctx: commands.Context, vote_id: str) -> None:
         """Show settings and rules for a specific vote."""
+        ctx = await commands.Context.from_interaction(ctx)
         guild = ctx.guild
         if not guild:
             await _send_ctx_message(ctx, "This command must be used in a server.")
