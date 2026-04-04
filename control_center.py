@@ -25,10 +25,17 @@ CONTROL_CENTER_STATIC_PATH = f"{CONTROL_CENTER_PATH}/static"
 CONTROL_CENTER_AUTH_PATH = f"{CONTROL_CENTER_PATH}/auth"
 
 
+def _normalize_control_base(base_url: str) -> str:
+    normalized = base_url.strip().rstrip("/")
+    if normalized.endswith(CONTROL_CENTER_PATH):
+        return normalized
+    return f"{normalized}{CONTROL_CENTER_PATH}"
+
+
 def build_control_center_url(host: str, port: int, public_url: str = "") -> str:
     explicit = public_url.strip().rstrip("/")
     if explicit:
-        return f"{explicit}{CONTROL_CENTER_PATH}"
+        return _normalize_control_base(explicit)
     normalized_host = host.strip() or "127.0.0.1"
     if normalized_host in {"0.0.0.0", "::"}:
         normalized_host = "localhost"
@@ -371,6 +378,8 @@ def _cookie_secure(redirect_uri: str, public_url: str) -> bool:
 def _public_site_base(public_url: str, host: str, port: int) -> str:
     explicit = public_url.strip().rstrip("/")
     if explicit:
+        if explicit.endswith(CONTROL_CENTER_PATH):
+            return explicit[: -len(CONTROL_CENTER_PATH)] or "/"
         return explicit
     normalized_host = host.strip() or "127.0.0.1"
     if normalized_host in {"0.0.0.0", "::"}:
@@ -592,6 +601,15 @@ def create_control_center_app(
     async def landing_index(_: web.Request) -> web.StreamResponse:
         return web.FileResponse(landing_root / "index.html")
 
+    async def landing_styles(_: web.Request) -> web.StreamResponse:
+        return web.FileResponse(landing_root / "styles.css")
+
+    async def landing_script(_: web.Request) -> web.StreamResponse:
+        return web.FileResponse(landing_root / "script.js")
+
+    async def landing_404(_: web.Request) -> web.StreamResponse:
+        return web.FileResponse(landing_root / "404.html")
+
     async def index(_: web.Request) -> web.StreamResponse:
         return web.FileResponse(static_root / "index.html")
 
@@ -770,6 +788,9 @@ def create_control_center_app(
         return web.json_response(response_payload)
 
     app.router.add_get("/", landing_index)
+    app.router.add_get("/styles.css", landing_styles)
+    app.router.add_get("/script.js", landing_script)
+    app.router.add_get("/404.html", landing_404)
     app.router.add_get(CONTROL_CENTER_PATH, index)
     app.router.add_get(CONTROL_CENTER_PATH + "/", index)
     app.router.add_get(f"{CONTROL_CENTER_AUTH_PATH}/login", auth_login)
@@ -779,7 +800,7 @@ def create_control_center_app(
     app.router.add_get(f"{CONTROL_CENTER_API_PATH}/guilds", guild_list)
     app.router.add_get(f"{CONTROL_CENTER_API_PATH}/guilds/{{guild_id}}", guild_detail)
     app.router.add_put(f"{CONTROL_CENTER_API_PATH}/guilds/{{guild_id}}", update_guild)
-    app.router.add_static("/site/", landing_root, show_index=False)
+    app.router.add_static("/Images/", landing_root / "Images", show_index=False)
     app.router.add_static(CONTROL_CENTER_STATIC_PATH + "/", static_root, show_index=False)
     return app
 
