@@ -13,6 +13,7 @@ This repository is source-available, not open-source.
 
 - Moderation commands: lockdown, timeout, warn, purge, undo/cases
 - Community commands: reminders, poll/choose/roll, server/user info
+- User install commands: personal reminders, AI chat, avatar/banner lookups, mutual server listing, and install-context detection
 - Ops features: status checks, guard mode, advanced vote tracking (custom ballots, elections, runoff, quorum/threshold rules, and auto-executed action votes via `/voteaction`), AI chat relay with session memory (`/vanguard`) and reset (`/vanguardreset`)
 - Identity hooks: optional Continental ID account lookup via `/continentalid`
 - Policy commands: privacy and terms
@@ -90,6 +91,7 @@ Environment variables are read from `.env` (via `python-dotenv`) or your shell.
 - `VANGUARD_CONTROL_CENTER_REDIRECT_URI` (registered Discord OAuth callback URL, for example `http://127.0.0.1:8080/control/auth/callback`)
 - `VANGUARD_CONTROL_CENTER_TOKEN` (optional operator override token for full-instance access; normal users should log in with Discord)
 - `VANGUARD_CONTROL_CENTER_PUBLIC_URL` (optional URL advertised by `/controlcenter`; useful when the bot is reverse-proxied)
+- `VANGUARD_GUILD_JOIN_NOTIFY_USER_ID` (optional Discord user ID to DM whenever Vanguard joins a server)
 - `PRIVACY_POLICY_URL` (optional)
 - `TERMS_OF_SERVICE_URL` (optional)
 - `VANGUARD_DATA_DIR` (default: `./data`)
@@ -112,6 +114,14 @@ Runtime JSON state is stored in `data/`:
 - `data/votes.json`
 
 On startup, legacy root files are migrated into `data/` automatically when possible.
+
+## User Install Support
+
+Vanguard supports both server installs and user installs.
+
+- User installs expose personal-safe commands in DMs and other private contexts, including `/installcontext`, `/mutualservers`, `/banner`, `/userinfo`, reminders, and AI chat.
+- Server moderation, guard, voting administration, and guild configuration commands remain guild-only.
+- `/help` adapts its overview so account-safe commands and server-only commands are separated clearly.
 
 ## Control Center
 

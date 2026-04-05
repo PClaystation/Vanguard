@@ -306,6 +306,10 @@ VANGUARD_CONTROL_CENTER_PORT = _parse_env_int(
     maximum=65535,
 )
 VANGUARD_CONTROL_CENTER_PUBLIC_URL = os.getenv("VANGUARD_CONTROL_CENTER_PUBLIC_URL", "").strip()
+VANGUARD_GUILD_JOIN_NOTIFY_USER_ID = _parse_env_optional_int(
+    "VANGUARD_GUILD_JOIN_NOTIFY_USER_ID",
+    minimum=1,
+)
 SETTINGS_FILE = resolve_data_file("settings.json")
 REMINDERS_FILE = resolve_data_file("reminders.json")
 MOD_LOG_FILE = resolve_data_file("modlog.json")
@@ -852,6 +856,39 @@ async def send_ops_log(guild: discord.Guild, message: str) -> None:
             await channel.send(message)
         except Exception:
             pass
+
+
+def build_guild_join_notification(guild: discord.Guild, *, authorized: bool) -> str:
+    status = "authorized" if authorized else "unauthorized"
+    lines = [
+        "Vanguard joined a server.",
+        f"Server: {guild.name}",
+        f"Server ID: {guild.id}",
+        f"Owner ID: {getattr(guild, 'owner_id', 'unknown')}",
+        f"Members: {getattr(guild, 'member_count', 'unknown')}",
+        f"Status: {status}",
+    ]
+    return "\n".join(lines)
+
+
+async def notify_personal_account_guild_join(guild: discord.Guild, *, authorized: bool) -> bool:
+    if VANGUARD_GUILD_JOIN_NOTIFY_USER_ID is None:
+        return False
+
+    user = bot.get_user(VANGUARD_GUILD_JOIN_NOTIFY_USER_ID)
+    if user is None:
+        try:
+            user = await bot.fetch_user(VANGUARD_GUILD_JOIN_NOTIFY_USER_ID)
+        except Exception as exc:
+            print(f"[GUILD JOIN] Failed fetching notify user {VANGUARD_GUILD_JOIN_NOTIFY_USER_ID}: {exc}")
+            return False
+
+    try:
+        await user.send(build_guild_join_notification(guild, authorized=authorized))
+    except Exception as exc:
+        print(f"[GUILD JOIN] Failed sending join notification for guild {guild.id}: {exc}")
+        return False
+    return True
 
 
 def build_backend_headers(include_license: bool = False) -> dict[str, str]:
@@ -1534,6 +1571,184 @@ def _format_app_command_usage(command) -> str:
     return f"/{command.qualified_name}{suffix}"
 
 
+ACCOUNT_INSTALL_COMMAND_NAMES = {
+    "help",
+    "status",
+    "privacy",
+    "tos",
+    "avatar",
+    "banner",
+    "userinfo",
+    "continentalid",
+    "installcontext",
+    "mutualservers",
+    "choose",
+    "roll",
+    "poll",
+    "remindme",
+    "reminders",
+    "cancelreminder",
+    "vanguard",
+    "vanguardreset",
+    "flaguser",
+    "unflaguser",
+    "owneronly",
+}
+
+GUILD_ONLY_COMMAND_NAMES = {
+    "guard",
+    "guardadvanced",
+    "guardstatus",
+    "guardreset",
+    "votecreate",
+    "voteaction",
+    "startelection",
+    "voteclose",
+    "voteextend",
+    "voteconfig",
+    "setlogchannel",
+    "setopschannel",
+    "ops",
+    "controlcenter",
+    "purge",
+    "slowmode",
+    "nick",
+    "timeout",
+    "untimeout",
+    "warn",
+    "cases",
+    "undo",
+    "serverinfo",
+    "lockdown",
+    "unlock",
+    "setwelcomechannel",
+    "setwelcomerole",
+    "setwelcomemessage",
+    "setlockdownrole",
+    "setmodroles",
+    "showconfig",
+    "voteinfo",
+    "activevotes",
+}
+
+PERSONAL_HELP_COMMANDS = (
+    "help",
+    "installcontext",
+    "status",
+    "avatar",
+    "banner",
+    "userinfo",
+    "continentalid",
+    "mutualservers",
+    "choose",
+    "roll",
+    "poll",
+    "remindme",
+    "reminders",
+    "cancelreminder",
+    "vanguard",
+    "vanguardreset",
+    "privacy",
+    "tos",
+)
+
+SERVER_HELP_COMMANDS = (
+    "ops",
+    "voteinfo",
+    "activevotes",
+    "voteconfig",
+    "serverinfo",
+    "lockdown",
+    "unlock",
+    "purge",
+    "slowmode",
+    "nick",
+    "timeout",
+    "untimeout",
+    "warn",
+    "cases",
+    "undo",
+    "guard",
+    "guardadvanced",
+    "guardstatus",
+    "guardreset",
+    "votecreate",
+    "voteaction",
+    "startelection",
+    "voteextend",
+    "voteclose",
+    "showconfig",
+    "setwelcomechannel",
+    "setwelcomerole",
+    "setwelcomemessage",
+    "setlockdownrole",
+    "setmodroles",
+    "setlogchannel",
+    "setopschannel",
+    "controlcenter",
+)
+
+
+def _format_command_list(command_names: tuple[str, ...]) -> str:
+    return " ".join(f"`{name}`" for name in command_names)
+
+
+def describe_interaction_install_type(interaction: discord.Interaction | None) -> str:
+    if interaction is None:
+        return "Unknown"
+    if interaction.is_guild_integration() and interaction.is_user_integration():
+        return "Guild + User Install"
+    if interaction.is_user_integration():
+        return "User Install"
+    if interaction.is_guild_integration():
+        return "Guild Install"
+    return "Unknown"
+
+
+def find_mutual_guilds(
+    guilds: list[discord.Guild] | tuple[discord.Guild, ...],
+    user_id: int,
+) -> list[discord.Guild]:
+    shared: list[discord.Guild] = []
+    for guild in guilds:
+        if guild.get_member(user_id) is not None:
+            shared.append(guild)
+    return shared
+
+
+def configure_app_command_visibility(tree: app_commands.CommandTree) -> None:
+    unclassified: list[str] = []
+    for command in tree.walk_commands(type=discord.AppCommandType.chat_input):
+        command.guild_only = False
+        if command.name in ACCOUNT_INSTALL_COMMAND_NAMES:
+            command.allowed_installs = app_commands.AppInstallationType(guild=True, user=True)
+            command.allowed_contexts = app_commands.AppCommandContext(
+                guild=True,
+                dm_channel=True,
+                private_channel=True,
+            )
+            continue
+        if command.name in GUILD_ONLY_COMMAND_NAMES:
+            command.allowed_installs = app_commands.AppInstallationType(guild=True, user=False)
+            command.allowed_contexts = app_commands.AppCommandContext(
+                guild=True,
+                dm_channel=False,
+                private_channel=False,
+            )
+            continue
+        unclassified.append(command.name)
+
+    if unclassified:
+        names = ", ".join(sorted(unclassified))
+        raise RuntimeError(f"Unclassified app command install visibility: {names}")
+
+
+def resolve_display_name(target: discord.User | discord.Member) -> str:
+    if isinstance(target, discord.Member):
+        return target.display_name
+    return target.global_name or target.name
+
+
 class VanguardCommandTree(app_commands.CommandTree):
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if settings.get("owner_only", False) and not await bot.is_owner(interaction.user):
@@ -1709,7 +1924,9 @@ async def on_ready():
 
 @bot.event
 async def on_guild_join(guild: discord.Guild):
-    if is_guild_authorized(guild.id):
+    authorized = is_guild_authorized(guild.id)
+    await notify_personal_account_guild_join(guild, authorized=authorized)
+    if authorized:
         return
     try:
         await guild.leave()
@@ -1890,38 +2107,18 @@ async def help_command(ctx: commands.Context, *, command_name: str | None = None
         return
 
     embed = discord.Embed(title="Vanguard Bot Help", color=discord.Color.red())
+    install_type = describe_interaction_install_type(ctx.interaction)
+    source = ctx.guild.name if ctx.guild else "Direct Message"
     embed.description = "Slash commands only. Use `/help <command>` for detailed help."
+    embed.add_field(name="Current Context", value=f"{install_type} in `{source}`", inline=False)
     embed.add_field(
-        name="General",
-        value=(
-            "`help` `status` `serverinfo` `userinfo` `avatar` `continentalid` `controlcenter` "
-            "`voteinfo` `activevotes` `voteconfig` `ops`"
-        ),
+        name="Personal / User Install",
+        value=_format_command_list(PERSONAL_HELP_COMMANDS),
         inline=False,
     )
     embed.add_field(
-        name="Community",
-        value=(
-            "`poll` `choose` `roll` `remindme` `reminders` "
-            "`cancelreminder` `votecreate` `voteaction` `startelection` `voteextend` `voteclose`"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Moderation",
-        value=(
-            "`lockdown` `unlock` `purge` `slowmode` `nick` `timeout` `untimeout` "
-            "`guard` `guardadvanced` `guardstatus` `guardreset` `warn` `cases` `undo`"
-        ),
-        inline=False,
-    )
-    embed.add_field(
-        name="Configuration",
-        value=(
-            "`showconfig` `setwelcomechannel` `setwelcomerole` "
-            "`setwelcomemessage` `setlockdownrole` `setmodroles` "
-            "`setlogchannel` `setopschannel`"
-        ),
+        name="Server Only",
+        value=_format_command_list(SERVER_HELP_COMMANDS),
         inline=False,
     )
     embed.add_field(
@@ -2202,46 +2399,88 @@ async def controlcenter(ctx: commands.Context):
 
 
 @bot.tree.command()
-async def avatar(ctx: commands.Context, member: discord.Member | None = None):
+async def avatar(ctx: commands.Context, user: discord.User | None = None):
     """Show a user's avatar."""
     ctx = await commands.Context.from_interaction(ctx)
-    target = member or ctx.author
+    target = user or ctx.author
     if not isinstance(target, (discord.Member, discord.User)):
         await ctx.send("❌ Could not resolve user.")
         return
-    embed = discord.Embed(title=f"Avatar: {target.display_name if isinstance(target, discord.Member) else target.name}", color=discord.Color.red())
+    embed = discord.Embed(title=f"Avatar: {resolve_display_name(target)}", color=discord.Color.red())
     embed.set_image(url=target.display_avatar.url)
     await ctx.send(embed=embed)
 
 
 @bot.tree.command()
-async def userinfo(ctx: commands.Context, member: discord.Member | None = None):
-    """Show information about a server member."""
+async def banner(ctx: commands.Context, user: discord.User | None = None):
+    """Show a user's banner if they have one."""
     ctx = await commands.Context.from_interaction(ctx)
-    if ctx.guild is None:
-        await ctx.send("⚠️ This command can only be used in a server.")
+    target = user or ctx.author
+    try:
+        fetched_user = await bot.fetch_user(target.id)
+    except (discord.NotFound, discord.HTTPException):
+        await ctx.send("❌ Could not load that user's profile.")
         return
-    target = member or ctx.author
-    if not isinstance(target, discord.Member):
-        await ctx.send("❌ Could not resolve member.")
+
+    accent = fetched_user.accent_color or discord.Color.red()
+    embed = discord.Embed(title=f"Banner: {resolve_display_name(fetched_user)}", color=accent)
+    if fetched_user.banner:
+        embed.set_image(url=fetched_user.banner.url)
+    else:
+        embed.description = "This user does not have a profile banner set."
+    if fetched_user.accent_color:
+        embed.add_field(name="Accent Color", value=str(fetched_user.accent_color), inline=True)
+    embed.set_thumbnail(url=fetched_user.display_avatar.url)
+    await ctx.send(embed=embed)
+
+
+@bot.tree.command()
+async def userinfo(ctx: commands.Context, user: discord.User | None = None):
+    """Show account details, with server-specific details when used in a server."""
+    ctx = await commands.Context.from_interaction(ctx)
+    target = user or ctx.author
+    if not isinstance(target, (discord.Member, discord.User)):
+        await ctx.send("❌ Could not resolve user.")
         return
-    roles = [role.mention for role in target.roles if role != ctx.guild.default_role]
-    embed = discord.Embed(title=f"User Info: {target}", color=discord.Color.red())
+
+    guild_member: discord.Member | None = None
+    if ctx.guild is not None:
+        guild_member = ctx.guild.get_member(target.id)
+        if guild_member is None:
+            try:
+                guild_member = await ctx.guild.fetch_member(target.id)
+            except (discord.NotFound, discord.HTTPException):
+                guild_member = None
+
+    embed = discord.Embed(title=f"User Info: {resolve_display_name(target)}", color=discord.Color.red())
     embed.add_field(name="User ID", value=str(target.id), inline=True)
-    embed.add_field(name="Joined Server", value=target.joined_at.strftime("%Y-%m-%d %H:%M:%S") if target.joined_at else "Unknown", inline=True)
     embed.add_field(name="Account Created", value=target.created_at.strftime("%Y-%m-%d %H:%M:%S"), inline=True)
-    embed.add_field(name="Top Role", value=target.top_role.mention if target.top_role else "None", inline=True)
-    embed.add_field(name="Roles", value=", ".join(roles[-10:]) if roles else "None", inline=False)
+    embed.add_field(
+        name="Profile",
+        value=f"Mention: {target.mention}\nBot: {'YES' if target.bot else 'NO'}",
+        inline=False,
+    )
+    if guild_member is not None and ctx.guild is not None:
+        roles = [role.mention for role in guild_member.roles if role != ctx.guild.default_role]
+        embed.add_field(
+            name="Joined Server",
+            value=guild_member.joined_at.strftime("%Y-%m-%d %H:%M:%S") if guild_member.joined_at else "Unknown",
+            inline=True,
+        )
+        embed.add_field(name="Top Role", value=guild_member.top_role.mention if guild_member.top_role else "None", inline=True)
+        embed.add_field(name="Roles", value=", ".join(roles[-10:]) if roles else "None", inline=False)
+    elif ctx.guild is not None:
+        embed.add_field(name="Server Membership", value="User is not available as a member in this server cache.", inline=False)
     embed.set_thumbnail(url=target.display_avatar.url)
     await ctx.send(embed=embed)
 
 
 @bot.tree.command(name="continentalid")
 @app_commands.checks.cooldown(3, 30.0, key=_user_cooldown_key)
-async def continentalid(ctx: commands.Context, member: discord.Member | None = None):
+async def continentalid(ctx: commands.Context, user: discord.User | None = None):
     """Show Continental ID link status for yourself or, with Manage Server, another member."""
     ctx = await commands.Context.from_interaction(ctx)
-    target = member or ctx.author
+    target = user or ctx.author
     target_id = getattr(target, "id", None)
     if target_id is None:
         await safe_ctx_send(ctx, "❌ Could not resolve user.")
@@ -2277,7 +2516,7 @@ async def continentalid(ctx: commands.Context, member: discord.Member | None = N
     payload = result.get("body", {})
     user_payload = payload.get("user") if isinstance(payload, dict) else {}
     flags = payload.get("flags") if isinstance(payload, dict) else {}
-    target_name = target.display_name if isinstance(target, discord.Member) else getattr(target, "name", "User")
+    target_name = resolve_display_name(target)
     embed = discord.Embed(title=f"Continental ID: {target_name}", color=discord.Color.red())
     if hasattr(target, "display_avatar"):
         embed.set_thumbnail(url=target.display_avatar.url)
@@ -2317,6 +2556,44 @@ async def continentalid(ctx: commands.Context, member: discord.Member | None = N
             embed.add_field(name="Flag Reason", value=flag_reason[:240], inline=False)
 
     await ctx.send(embed=embed)
+
+
+@bot.tree.command(name="installcontext")
+async def installcontext(ctx: commands.Context):
+    """Show whether this command came from a user install or a server install."""
+    ctx = await commands.Context.from_interaction(ctx)
+    install_type = describe_interaction_install_type(ctx.interaction)
+    source = ctx.guild.name if ctx.guild else "Direct Message"
+
+    embed = discord.Embed(title="Vanguard Install Context", color=discord.Color.red())
+    embed.add_field(name="Install Type", value=install_type, inline=True)
+    embed.add_field(name="Source", value=source, inline=True)
+    embed.add_field(
+        name="Works In User Installs",
+        value=_format_command_list(PERSONAL_HELP_COMMANDS),
+        inline=False,
+    )
+    embed.add_field(
+        name="Server-Only Commands",
+        value="Server moderation, guard, vote management, and config commands stay guild-only.",
+        inline=False,
+    )
+    await ctx.send(embed=embed)
+
+
+@bot.tree.command(name="mutualservers")
+async def mutualservers(ctx: commands.Context):
+    """List servers shared between you and Vanguard."""
+    ctx = await commands.Context.from_interaction(ctx)
+    shared = find_mutual_guilds(list(bot.guilds), ctx.author.id)
+    if not shared:
+        await ctx.send("No shared servers found.")
+        return
+
+    lines = [f"`{guild.name}` • `{guild.id}`" for guild in shared[:15]]
+    if len(shared) > 15:
+        lines.append(f"...and `{len(shared) - 15}` more")
+    await send_chunked_message(ctx, "**Shared servers with Vanguard:**\n" + "\n".join(lines))
 
 
 @bot.tree.command()
@@ -3332,6 +3609,9 @@ async def activevotes(ctx: commands.Context):
             f"Leader: {leader_text} • Ends: {finish_text}"
         )
     await send_chunked_message(ctx, "**Active votes:**\n" + "\n\n".join(lines))
+
+
+configure_app_command_visibility(bot.tree)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,8 @@
 import importlib
+import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def load_thingamabot(monkeypatch, tmp_path):
@@ -162,7 +164,75 @@ def test_commands_are_registered_only_as_slash_commands(monkeypatch, tmp_path):
 
     assert not bot.bot.commands
     tree_commands = {command.name for command in bot.bot.tree.walk_commands()}
-    assert {"help", "status", "guard", "votecreate"}.issubset(tree_commands)
+    assert {"help", "status", "guard", "votecreate", "banner", "installcontext", "mutualservers"}.issubset(tree_commands)
+
+
+def test_account_install_commands_allow_user_installs(monkeypatch, tmp_path):
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    command = bot.bot.tree.get_command("installcontext")
+
+    assert command is not None
+    assert command.allowed_installs is not None
+    assert command.allowed_contexts is not None
+    assert command.allowed_installs.guild is True
+    assert command.allowed_installs.user is True
+    assert command.allowed_contexts.guild is True
+    assert command.allowed_contexts.dm_channel is True
+    assert command.allowed_contexts.private_channel is True
+
+
+def test_guild_only_commands_block_user_installs(monkeypatch, tmp_path):
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    command = bot.bot.tree.get_command("guard")
+
+    assert command is not None
+    assert command.allowed_installs is not None
+    assert command.allowed_contexts is not None
+    assert command.allowed_installs.guild is True
+    assert command.allowed_installs.user is False
+    assert command.allowed_contexts.guild is True
+    assert command.allowed_contexts.dm_channel is False
+    assert command.allowed_contexts.private_channel is False
+
+
+def test_describe_interaction_install_type_supports_user_and_guild_modes(monkeypatch, tmp_path):
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    assert (
+        bot.describe_interaction_install_type(
+            SimpleNamespace(is_guild_integration=lambda: False, is_user_integration=lambda: True)
+        )
+        == "User Install"
+    )
+    assert (
+        bot.describe_interaction_install_type(
+            SimpleNamespace(is_guild_integration=lambda: True, is_user_integration=lambda: False)
+        )
+        == "Guild Install"
+    )
+
+
+def test_find_mutual_guilds_filters_on_membership(monkeypatch, tmp_path):
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    class FakeGuild:
+        def __init__(self, guild_id: int, member_ids: set[int]):
+            self.id = guild_id
+            self._member_ids = member_ids
+
+        def get_member(self, user_id: int):
+            return object() if user_id in self._member_ids else None
+
+    guilds = [
+        FakeGuild(1, {10, 20}),
+        FakeGuild(2, {20}),
+        FakeGuild(3, {30}),
+    ]
+
+    shared_ids = [guild.id for guild in bot.find_mutual_guilds(guilds, 20)]
+    assert shared_ids == [1, 2]
 
 
 def test_parse_allowed_guild_ids_skips_invalid_values(monkeypatch, tmp_path):
@@ -234,3 +304,89 @@ def test_normalize_license_entitlements_supports_dashboard_shape(monkeypatch, tm
         "advancedVotes": True,
         "guardPresets": ["balanced", "strict"],
     }
+
+
+def test_notify_personal_account_guild_join_sends_dm(monkeypatch, tmp_path):
+    monkeypatch.setenv("VANGUARD_GUILD_JOIN_NOTIFY_USER_ID", "999")
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    sent_messages: list[str] = []
+
+    class FakeUser:
+        async def send(self, message: str):
+            sent_messages.append(message)
+
+    monkeypatch.setattr(bot.bot, "get_user", lambda user_id: FakeUser() if user_id == 999 else None)
+    guild = SimpleNamespace(name="Alpha", id=123, owner_id=456, member_count=78)
+
+    result = asyncio.run(bot.notify_personal_account_guild_join(guild, authorized=True))
+
+    assert result is True
+    assert sent_messages == [
+        "Vanguard joined a server.\n"
+        "Server: Alpha\n"
+        "Server ID: 123\n"
+        "Owner ID: 456\n"
+        "Members: 78\n"
+        "Status: authorized"
+    ]
+
+
+def test_on_guild_join_notifies_and_leaves_unauthorized_guild(monkeypatch, tmp_path):
+    monkeypatch.setenv("VANGUARD_GUILD_JOIN_NOTIFY_USER_ID", "999")
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    notifications: list[tuple[int, bool]] = []
+    monkeypatch.setattr(
+        bot,
+        "notify_personal_account_guild_join",
+        lambda guild, authorized: notifications.append((guild.id, authorized)) or asyncio.sleep(0, result=True),
+    )
+    monkeypatch.setattr(bot, "is_guild_authorized", lambda guild_id: False)
+
+    class FakeGuild:
+        id = 321
+        name = "Blocked Guild"
+
+        def __init__(self):
+            self.left = False
+
+        async def leave(self):
+            self.left = True
+
+    guild = FakeGuild()
+
+    asyncio.run(bot.on_guild_join(guild))
+
+    assert notifications == [(321, False)]
+    assert guild.left is True
+
+
+def test_on_guild_join_notifies_authorized_guild_without_leaving(monkeypatch, tmp_path):
+    monkeypatch.setenv("VANGUARD_GUILD_JOIN_NOTIFY_USER_ID", "999")
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    notifications: list[tuple[int, bool]] = []
+    monkeypatch.setattr(
+        bot,
+        "notify_personal_account_guild_join",
+        lambda guild, authorized: notifications.append((guild.id, authorized)) or asyncio.sleep(0, result=True),
+    )
+    monkeypatch.setattr(bot, "is_guild_authorized", lambda guild_id: True)
+
+    class FakeGuild:
+        id = 654
+        name = "Allowed Guild"
+
+        def __init__(self):
+            self.left = False
+
+        async def leave(self):
+            self.left = True
+
+    guild = FakeGuild()
+
+    asyncio.run(bot.on_guild_join(guild))
+
+    assert notifications == [(654, True)]
+    assert guild.left is False
