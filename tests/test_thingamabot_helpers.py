@@ -159,6 +159,80 @@ def test_build_backend_headers_uses_configured_secrets(monkeypatch, tmp_path):
     assert headers["X-Vanguard-Instance-Id"] == "instance-1"
 
 
+def test_require_ai_access_defers_before_lookup(monkeypatch, tmp_path):
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+    events: list[str] = []
+
+    async def fake_defer(ctx, *, ephemeral=False):
+        events.append("defer")
+        return True
+
+    async def fake_to_thread(func, *args, **kwargs):
+        events.append("lookup")
+        return {
+            "configured": True,
+            "ok": True,
+            "body": {
+                "linked": True,
+                "user": {"discordLinked": True},
+                "flags": {},
+            },
+        }
+
+    monkeypatch.setattr(bot, "safe_ctx_defer", fake_defer)
+    monkeypatch.setattr(bot.asyncio, "to_thread", fake_to_thread)
+
+    ctx = SimpleNamespace(author=SimpleNamespace(id=123))
+
+    assert asyncio.run(bot.require_ai_access(ctx)) is True
+    assert events == ["defer", "lookup"]
+
+
+def test_send_backend_user_update_defers_before_request(monkeypatch, tmp_path):
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+    events: list[str] = []
+    sent_messages: list[str] = []
+
+    async def fake_defer(ctx, *, ephemeral=False):
+        events.append("defer")
+        return True
+
+    async def fake_send(ctx, message, *args, **kwargs):
+        sent_messages.append(message)
+        return None
+
+    async def fake_to_thread(func, *args, **kwargs):
+        events.append("request")
+
+        class FakeResponse:
+            status_code = 200
+            text = "ok"
+
+            @staticmethod
+            def json():
+                return {"message": "updated"}
+
+        return FakeResponse()
+
+    monkeypatch.setattr(bot, "safe_ctx_defer", fake_defer)
+    monkeypatch.setattr(bot, "safe_ctx_send", fake_send)
+    monkeypatch.setattr(bot.asyncio, "to_thread", fake_to_thread)
+
+    ctx = SimpleNamespace(guild=None)
+
+    asyncio.run(
+        bot.send_backend_user_update(
+            ctx,
+            "123",
+            "http://localhost/test",
+            "has been flagged",
+        )
+    )
+
+    assert events == ["defer", "request"]
+    assert sent_messages == ["✅ <@123> has been flagged. `updated`"]
+
+
 def test_commands_are_registered_only_as_slash_commands(monkeypatch, tmp_path):
     bot, _ = load_thingamabot(monkeypatch, tmp_path)
 

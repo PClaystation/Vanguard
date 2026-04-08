@@ -1162,6 +1162,7 @@ def get_ai_access_requirement_message(continental_result: Any) -> str | None:
 
 
 async def require_ai_access(ctx: commands.Context) -> bool:
+    await safe_ctx_defer(ctx)
     result = await asyncio.to_thread(resolve_continental_user_sync, ctx.author.id)
     denial_message = get_ai_access_requirement_message(result)
     if denial_message:
@@ -1337,6 +1338,7 @@ async def send_backend_user_update(
     endpoint: str,
     success_text: str,
 ) -> None:
+    await safe_ctx_defer(ctx)
     user_id = extract_id(target)
     if not user_id:
         await safe_ctx_send(ctx, "⚠️ Provide a mention (`@user`) or the raw numeric ID.")
@@ -2089,24 +2091,35 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError):
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     err = getattr(error, "original", error)
     message = "❌ Unexpected error while running that command."
+    handled = False
 
     if isinstance(error, app_commands.MissingPermissions):
         missing = ", ".join(error.missing_permissions)
         message = f"⛔ Missing required permissions: `{missing}`."
+        handled = True
     elif isinstance(error, app_commands.BotMissingPermissions):
         missing = ", ".join(error.missing_permissions)
         message = f"⛔ I am missing permissions: `{missing}`."
+        handled = True
     elif isinstance(error, app_commands.CommandOnCooldown):
         message = f"⏳ Slow down. Try again in `{error.retry_after:.1f}` seconds."
+        handled = True
     elif isinstance(error, app_commands.CheckFailure):
         message = str(error) or "⛔ You do not have permission to run this command."
+        handled = True
     elif isinstance(error, app_commands.TransformerError):
         if is_channel_transform_error(error):
             message = "⚠️ Invalid channel type for that option. Choose a normal text channel."
         else:
             message = "⚠️ Invalid argument. Check the command format and try again."
+        handled = True
     elif isinstance(err, commands.NotOwner):
         message = "⛔ This command is owner-only."
+        handled = True
+
+    if not handled:
+        print("[ERROR] Unhandled app command error:")
+        traceback.print_exception(type(err), err, err.__traceback__)
 
     try:
         if interaction.response.is_done():
@@ -2121,8 +2134,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
             except Exception:
                 pass
     except Exception:
-        print("[ERROR] Unhandled app command error:")
-        traceback.print_exception(type(error), error, error.__traceback__)
+        pass
 
 
 @bot.tree.command(name="help")
@@ -2276,6 +2288,7 @@ async def ops(ctx: commands.Context):
 async def status(ctx: commands.Context):
     """Runtime status, dependency checks, and key bot metrics."""
     ctx = await commands.Context.from_interaction(ctx)
+    await safe_ctx_defer(ctx)
     checks: list[tuple[str, str]] = []
     checks.append(("Discord", "OK"))
     checks.append(("Latency", f"{round(bot.latency * 1000)}ms"))
@@ -2519,6 +2532,7 @@ async def userinfo(ctx: commands.Context, user: discord.User | None = None):
 async def continentalid(ctx: commands.Context, user: discord.User | None = None):
     """Show Continental ID link status for yourself or, with Manage Server, another member."""
     ctx = await commands.Context.from_interaction(ctx)
+    await safe_ctx_defer(ctx)
     target = user or ctx.author
     target_id = getattr(target, "id", None)
     if target_id is None:
