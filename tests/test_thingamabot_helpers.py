@@ -541,3 +541,41 @@ def test_on_guild_join_notifies_authorized_guild_without_leaving(monkeypatch, tm
 
     assert notifications == [(654, True)]
     assert guild.left is False
+
+
+def test_should_send_welcome_event_dedupes_repeated_join(monkeypatch, tmp_path):
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+    bot.recent_welcome_events.clear()
+
+    assert bot.should_send_welcome_event(1, 2, now=100.0) is True
+    assert bot.should_send_welcome_event(1, 2, now=105.0) is False
+    assert bot.should_send_welcome_event(1, 3, now=105.0) is True
+    assert bot.should_send_welcome_event(1, 2, now=131.0) is True
+
+
+def test_on_member_join_ignores_duplicate_welcome_event(monkeypatch, tmp_path):
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+    bot.recent_welcome_events.clear()
+
+    calls: list[str] = []
+
+    async def fake_handle_guard_member_join(**kwargs):
+        calls.append("guard")
+
+    monkeypatch.setattr(bot, "get_guild_config", lambda guild_id: {"welcome_channel_id": 99, "welcome_role_id": None, "mod_role_ids": []})
+    monkeypatch.setattr(bot, "should_send_welcome_event", lambda guild_id, member_id: len(calls) == 0)
+    monkeypatch.setattr(bot, "handle_guard_member_join", fake_handle_guard_member_join)
+    monkeypatch.setattr(bot, "resolve_welcome_channel", lambda guild, channel_id: SimpleNamespace(send=lambda *args, **kwargs: asyncio.sleep(0)))
+    monkeypatch.setattr(bot, "build_welcome_embed", lambda member, guild_cfg: object())
+    monkeypatch.setattr(bot, "resolve_role", lambda guild, role_id: None)
+
+    member = SimpleNamespace(
+        id=22,
+        mention="<@22>",
+        guild=SimpleNamespace(id=11),
+    )
+
+    asyncio.run(bot.on_member_join(member))
+    asyncio.run(bot.on_member_join(member))
+
+    assert calls == ["guard"]

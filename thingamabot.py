@@ -8,6 +8,7 @@ import os
 import platform
 import random
 import re
+import time
 from threading import local
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -316,6 +317,8 @@ MOD_LOG_FILE = resolve_data_file("modlog.json")
 CONTROL_CENTER_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "control_center")
 LANDING_SITE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs")
 START_TIME = datetime.now(timezone.utc)
+WELCOME_DEDUPE_WINDOW_SECONDS = 30.0
+recent_welcome_events: dict[tuple[int, int], float] = {}
 REMINDER_CHECK_SECONDS = 15
 MAX_REMINDER_SECONDS = 60 * 60 * 24 * 30
 MAX_TIMEOUT_SECONDS = 60 * 60 * 24 * 28
@@ -843,6 +846,28 @@ def resolve_welcome_channel(
         if can_send(channel):
             return channel
     return None
+
+
+def should_send_welcome_event(
+    guild_id: int,
+    member_id: int,
+    *,
+    now: float | None = None,
+    window_seconds: float = WELCOME_DEDUPE_WINDOW_SECONDS,
+) -> bool:
+    current = time.monotonic() if now is None else now
+    cutoff = current - max(window_seconds, 0.0)
+    stale_keys = [key for key, seen_at in recent_welcome_events.items() if seen_at < cutoff]
+    for key in stale_keys:
+        recent_welcome_events.pop(key, None)
+
+    dedupe_key = (guild_id, member_id)
+    last_seen = recent_welcome_events.get(dedupe_key)
+    if last_seen is not None and current - last_seen <= max(window_seconds, 0.0):
+        return False
+
+    recent_welcome_events[dedupe_key] = current
+    return True
 
 
 async def send_ops_log(guild: discord.Guild, message: str) -> None:
@@ -2048,6 +2073,8 @@ async def on_guild_join(guild: discord.Guild):
 @bot.event
 async def on_member_join(member: discord.Member):
     guild_cfg = get_guild_config(member.guild.id)
+    if not should_send_welcome_event(member.guild.id, member.id):
+        return
     await handle_guard_member_join(
         bot=bot,
         member=member,
