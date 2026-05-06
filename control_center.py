@@ -19,6 +19,50 @@ CONTROL_CENTER_PATH = "/control"
 CONTROL_CENTER_API_PATH = f"{CONTROL_CENTER_PATH}/api"
 CONTROL_CENTER_STATIC_PATH = f"{CONTROL_CENTER_PATH}/static"
 CONTROL_CENTER_AUTH_PATH = f"{CONTROL_CENTER_PATH}/auth"
+CONTROL_CENTER_AUTH_CALLBACK_HTML = """<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Vanguard Sign-In</title>
+  </head>
+  <body>
+    <p id="status">Completing sign-in...</p>
+    <script>
+      const status = document.getElementById("status");
+      const query = new URLSearchParams(window.location.search);
+      const hash = new URLSearchParams(window.location.hash.slice(1));
+      const targetOrigin = query.get("origin") || hash.get("origin") || window.location.origin;
+      const accessToken =
+        query.get("accessToken") ||
+        query.get("access_token") ||
+        hash.get("accessToken") ||
+        hash.get("access_token") ||
+        "";
+      const error =
+        query.get("error_description") ||
+        query.get("error") ||
+        hash.get("error_description") ||
+        hash.get("error") ||
+        "";
+
+      if (window.opener && accessToken) {
+        window.opener.postMessage({ type: "LOGIN_SUCCESS", accessToken }, targetOrigin);
+        status.textContent = "Sign-in complete. You can close this window.";
+        window.close();
+      } else if (window.opener && error) {
+        window.opener.postMessage({ type: "LOGIN_ERROR", error }, targetOrigin);
+        status.textContent = error;
+      } else if (accessToken) {
+        status.textContent = "Access token received, but no opener window was found.";
+      } else if (error) {
+        status.textContent = error;
+      } else {
+        status.textContent = "No access token was returned to the Vanguard callback page.";
+      }
+    </script>
+  </body>
+</html>
+"""
 
 
 def _normalize_control_base(base_url: str) -> str:
@@ -921,6 +965,12 @@ def create_control_center_app(
         response.del_cookie(SESSION_COOKIE, path="/")
         return response
 
+    async def auth_callback(_: web.Request) -> web.StreamResponse:
+        return web.Response(
+            text=CONTROL_CENTER_AUTH_CALLBACK_HTML,
+            content_type="text/html",
+        )
+
     def get_manageable_guilds(auth: Mapping[str, Any]) -> list[discord.Guild]:
         manageable_ids = set(auth.get("manageable_guild_ids", set()))
         return sorted(
@@ -1080,6 +1130,7 @@ def create_control_center_app(
     app.router.add_get("/sitemap.xml", landing_sitemap)
     app.router.add_get(CONTROL_CENTER_PATH, index)
     app.router.add_get(CONTROL_CENTER_PATH + "/", index)
+    app.router.add_get(f"{CONTROL_CENTER_AUTH_PATH}/callback", auth_callback)
     app.router.add_post(f"{CONTROL_CENTER_AUTH_PATH}/logout", auth_logout)
     app.router.add_get(f"{CONTROL_CENTER_API_PATH}/session", session_info)
     app.router.add_post(f"{CONTROL_CENTER_API_PATH}/session/exchange", session_exchange)

@@ -3,6 +3,7 @@ import asyncio
 import sys
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
 
 def load_thingamabot(monkeypatch, tmp_path):
@@ -109,6 +110,29 @@ def test_ai_endpoints_derive_from_legacy_ask_url(monkeypatch, tmp_path):
     assert bot.AI_HEALTH_URL == "http://localhost:3001/health"
     assert bot.AI_MODELS_URL == "http://localhost:3001/models"
     assert bot.AI_SESSION_URL == "http://localhost:3001/session"
+
+
+def test_ai_same_origin_overrides_are_allowed(monkeypatch, tmp_path):
+    monkeypatch.setenv("AI_SERVER_BASE_URL", "http://localhost:3001")
+    monkeypatch.setenv("AI_CHAT_URL", "http://localhost:3001/custom-chat")
+    monkeypatch.setenv("AI_SESSION_URL", "http://localhost:3001/custom-session")
+
+    bot, _ = load_thingamabot(monkeypatch, tmp_path)
+
+    assert bot.AI_CHAT_URL == "http://localhost:3001/custom-chat"
+    assert bot.AI_SESSION_URL == "http://localhost:3001/custom-session"
+
+
+def test_ai_mismatched_origin_overrides_fail_fast(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("VANGUARD_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("AI_SERVER_BASE_URL", "http://localhost:3001")
+    monkeypatch.setenv("AI_SESSION_URL", "http://localhost:3006/session")
+    for module_name in ("thingamabot", "guard", "vote", "data_paths"):
+        sys.modules.pop(module_name, None)
+
+    with pytest.raises(ValueError, match="AI_SESSION_URL must use the same scheme/host/port"):
+        importlib.import_module("thingamabot")
 
 
 def test_continental_endpoints_derive_from_base_url(monkeypatch, tmp_path):
@@ -579,3 +603,4 @@ def test_on_member_join_ignores_duplicate_welcome_event(monkeypatch, tmp_path):
     asyncio.run(bot.on_member_join(member))
 
     assert calls == ["guard"]
+

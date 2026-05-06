@@ -13,7 +13,7 @@ from threading import local
 import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import discord
 from discord import app_commands
@@ -158,6 +158,29 @@ def _resolve_optional_base_url(explicit_base_url: str) -> str:
     return explicit_base_url.strip().rstrip("/")
 
 
+def _url_origin(url: str) -> tuple[str, str, int | None]:
+    parsed = urlsplit(url.strip())
+    hostname = (parsed.hostname or "").lower()
+    if not parsed.scheme or not hostname:
+        raise ValueError(f"Invalid URL: {url!r}")
+    return parsed.scheme.lower(), hostname, parsed.port
+
+
+def _resolve_ai_service_url(env_name: str, base_url: str, path: str) -> str:
+    explicit = os.getenv(env_name, "").strip().rstrip("/")
+    if not explicit:
+        return f"{base_url}{path}"
+
+    explicit_origin = _url_origin(explicit)
+    base_origin = _url_origin(base_url)
+    if explicit_origin != base_origin:
+        raise ValueError(
+            f"{env_name} must use the same scheme/host/port as AI_SERVER_BASE_URL "
+            f"({base_url}); got {explicit}"
+        )
+    return explicit
+
+
 def _resolve_service_url(
     explicit_url: str,
     base_url: str,
@@ -221,11 +244,11 @@ def _build_ai_options() -> dict[str, Any]:
 
 _legacy_ai_url = os.getenv("AI_SERVER_URL", "http://localhost:3001/ask")
 AI_SERVER_BASE_URL = _resolve_ai_base_url(os.getenv("AI_SERVER_BASE_URL", ""), _legacy_ai_url)
-AI_ASK_URL = os.getenv("AI_ASK_URL", f"{AI_SERVER_BASE_URL}/ask").strip()
-AI_CHAT_URL = os.getenv("AI_CHAT_URL", f"{AI_SERVER_BASE_URL}/chat").strip()
-AI_HEALTH_URL = os.getenv("AI_HEALTH_URL", f"{AI_SERVER_BASE_URL}/health").strip()
-AI_MODELS_URL = os.getenv("AI_MODELS_URL", f"{AI_SERVER_BASE_URL}/models").strip()
-AI_SESSION_URL = os.getenv("AI_SESSION_URL", f"{AI_SERVER_BASE_URL}/session").strip().rstrip("/")
+AI_ASK_URL = _resolve_ai_service_url("AI_ASK_URL", AI_SERVER_BASE_URL, "/ask")
+AI_CHAT_URL = _resolve_ai_service_url("AI_CHAT_URL", AI_SERVER_BASE_URL, "/chat")
+AI_HEALTH_URL = _resolve_ai_service_url("AI_HEALTH_URL", AI_SERVER_BASE_URL, "/health")
+AI_MODELS_URL = _resolve_ai_service_url("AI_MODELS_URL", AI_SERVER_BASE_URL, "/models")
+AI_SESSION_URL = _resolve_ai_service_url("AI_SESSION_URL", AI_SERVER_BASE_URL, "/session")
 AI_SERVER_URL = AI_ASK_URL
 CONTINENTAL_ID_BASE_URL = _resolve_optional_base_url(os.getenv("CONTINENTAL_ID_BASE_URL", ""))
 CONTINENTAL_ID_AUTH_BASE_URL = _resolve_optional_base_url(

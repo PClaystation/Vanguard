@@ -51,13 +51,13 @@ python3 thingamabot.py
 Environment variables are read from `.env` (via `python-dotenv`) or your shell.
 
 - `DISCORD_BOT_TOKEN` (required)
-- `AI_SERVER_BASE_URL` (default: derived from `AI_SERVER_URL`, usually `http://localhost:3001`)
-- `AI_SERVER_URL` (legacy/default ask endpoint, default: `http://localhost:3001/ask`)
-- `AI_ASK_URL` (default: `${AI_SERVER_BASE_URL}/ask`)
-- `AI_CHAT_URL` (default: `${AI_SERVER_BASE_URL}/chat`)
-- `AI_HEALTH_URL` (default: `${AI_SERVER_BASE_URL}/health`)
-- `AI_MODELS_URL` (default: `${AI_SERVER_BASE_URL}/models`)
-- `AI_SESSION_URL` (default: `${AI_SERVER_BASE_URL}/session`)
+- `AI_SERVER_BASE_URL` (primary AI config; default: derived from `AI_SERVER_URL`, usually `http://localhost:3001`)
+- `AI_SERVER_URL` (legacy ask endpoint fallback, default: `http://localhost:3001/ask`)
+- `AI_ASK_URL` (optional same-origin override, default: `${AI_SERVER_BASE_URL}/ask`)
+- `AI_CHAT_URL` (optional same-origin override, default: `${AI_SERVER_BASE_URL}/chat`)
+- `AI_HEALTH_URL` (optional same-origin override, default: `${AI_SERVER_BASE_URL}/health`)
+- `AI_MODELS_URL` (optional same-origin override, default: `${AI_SERVER_BASE_URL}/models`)
+- `AI_SESSION_URL` (optional same-origin override, default: `${AI_SERVER_BASE_URL}/session`)
 - `CONTINENTAL_ID_BASE_URL` (optional base URL for Continental ID service integration)
 - `CONTINENTAL_ID_HEALTH_URL` (optional override, default: `${CONTINENTAL_ID_BASE_URL}/api/vanguard/health`)
 - `CONTINENTAL_ID_RESOLVE_URL` (optional override, default: `${CONTINENTAL_ID_BASE_URL}/api/vanguard/users/resolve`)
@@ -76,6 +76,7 @@ Environment variables are read from `.env` (via `python-dotenv`) or your shell.
 - `CONTINENTAL_ID_LOGIN_URL` (default: `https://login.continental-hub.com/popup.html`)
 - `CONTINENTAL_ID_DASHBOARD_URL` (default: `https://dashboard.continental-hub.com/?tab=settings`)
 - `FLAG_USER_URL` (default: legacy backend URL, or `${CONTINENTAL_ID_BASE_URL}/api/vanguard/users/flag` when using Continental ID)
+- AI safety rule: all explicit AI endpoint overrides must use the same scheme, host, and port as `AI_SERVER_BASE_URL`; the bot now fails fast on startup if they drift.
 - `UNFLAG_USER_URL` (default: legacy backend URL, or `${CONTINENTAL_ID_BASE_URL}/api/vanguard/users/unflag` when using Continental ID)
 - `VANGUARD_BACKEND_API_KEY` (optional secret header value used for AI/backend requests)
 - `VANGUARD_BACKEND_KEY_HEADER` (default: `X-Vanguard-Api-Key`)

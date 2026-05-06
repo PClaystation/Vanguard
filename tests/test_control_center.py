@@ -457,6 +457,54 @@ def test_control_center_lockdown_action_uses_authenticated_actor_context():
     asyncio.run(scenario())
 
 
+def test_control_center_auth_callback_page_exists():
+    async def scenario():
+        guild = FakeGuild()
+        bot = FakeBot([guild])
+        guild_cfg = default_guild_config()
+
+        app = create_control_center_app(
+            bot=bot,
+            get_guild_config=lambda guild_id: guild_cfg,
+            save_settings=lambda: True,
+            normalize_guard_settings=normalize_guard_settings,
+            resolve_guard_preset_name=resolve_guard_preset_name,
+            apply_guard_preset=apply_guard_preset,
+            guard_runtime_stats={},
+            reminders=[],
+            modlog={},
+            vote_store={},
+            parse_datetime_utc=parse_datetime,
+            http_request=lambda *args, **kwargs: None,
+            can_access_guild=_allow_access,
+            fetch_continental_profile=_fetch_continental_profile,
+            get_license_state=lambda: None,
+            continental_login_url="https://continental.example/login",
+            continental_dashboard_url="https://continental.example/dashboard",
+            public_url="",
+            site_host="127.0.0.1",
+            site_port=8080,
+            static_dir="control_center",
+            landing_dir="website",
+        )
+
+        server = TestServer(app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            response = await client.get("/control/auth/callback?origin=http://127.0.0.1:8080")
+            assert response.status == 200
+            assert response.content_type == "text/html"
+            body = await response.text()
+            assert "LOGIN_SUCCESS" in body
+            assert "postMessage" in body
+            assert "Completing sign-in" in body
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
 async def _allow_access(guild, user_id: int) -> bool:
     return guild.id == 123 and user_id == 555
 
