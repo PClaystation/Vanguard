@@ -406,6 +406,20 @@ def build_guild_authorization(guild_id: int, raw_license_state: Mapping[str, Any
     }
 
 
+def _guild_from_request(
+    request: web.Request,
+    bot: discord.Client,
+) -> tuple[discord.Guild | None, web.StreamResponse | None]:
+    auth = request["auth"]
+    guild_id = _coerce_optional_int(request.match_info.get("guild_id"))
+    guild = bot.get_guild(guild_id or 0)
+    if guild is None:
+        return None, web.json_response({"error": "Guild not found."}, status=404)
+    if guild.id not in set(auth.get("manageable_guild_ids", set())):
+        return None, web.json_response({"error": "Forbidden."}, status=403)
+    return guild, None
+
+
 def apply_guild_control_update(
     guild: discord.Guild,
     guild_cfg: dict[str, Any],
@@ -551,6 +565,7 @@ def create_control_center_app(
     site_port: int,
     static_dir: str | Path,
     landing_dir: str | Path,
+    trigger_lockdown_action: Callable[[discord.Guild, int, str, bool], Awaitable[tuple[bool, str]]] | None = None,
 ) -> web.Application:
     static_root = Path(static_dir)
     landing_root = Path(landing_dir)
@@ -947,13 +962,9 @@ def create_control_center_app(
         return web.json_response(payload)
 
     async def guild_detail(request: web.Request) -> web.StreamResponse:
-        auth = request["auth"]
-        guild_id = _coerce_optional_int(request.match_info.get("guild_id"))
-        guild = bot.get_guild(guild_id or 0)
-        if guild is None:
-            return web.json_response({"error": "Guild not found."}, status=404)
-        if guild.id not in set(auth.get("manageable_guild_ids", set())):
-            return web.json_response({"error": "Forbidden."}, status=403)
+        guild, error_response = _guild_from_request(request, bot)
+        if error_response is not None:
+            return error_response
         license_state = current_license_state()
         payload = build_guild_detail(
             guild,
@@ -970,13 +981,9 @@ def create_control_center_app(
         return web.json_response(payload)
 
     async def update_guild(request: web.Request) -> web.StreamResponse:
-        auth = request["auth"]
-        guild_id = _coerce_optional_int(request.match_info.get("guild_id"))
-        guild = bot.get_guild(guild_id or 0)
-        if guild is None:
-            return web.json_response({"error": "Guild not found."}, status=404)
-        if guild.id not in set(auth.get("manageable_guild_ids", set())):
-            return web.json_response({"error": "Forbidden."}, status=403)
+        guild, error_response = _guild_from_request(request, bot)
+        if error_response is not None:
+            return error_response
         try:
             payload = await request.json()
         except Exception:
@@ -1015,6 +1022,50 @@ def create_control_center_app(
         response_payload["license"] = license_state
         return web.json_response(response_payload)
 
+    async def update_lockdown(request: web.Request) -> web.StreamResponse:
+        if trigger_lockdown_action is None:
+            return web.json_response(
+                {"error": "Lockdown actions are not configured for this Vanguard instance."},
+                status=501,
+            )
+
+        guild, error_response = _guild_from_request(request, bot)
+        if error_response is not None:
+            return error_response
+
+        try:
+            payload = await request.json()
+        except Exception:
+            return web.json_response({"error": "Request body must be valid JSON."}, status=400)
+        if not isinstance(payload, Mapping):
+            return web.json_response({"error": "Expected a JSON object."}, status=400)
+
+        locked = payload.get("locked")
+        if not isinstance(locked, bool):
+            return web.json_response({"error": "`locked` must be true or false."}, status=400)
+
+        auth = request["auth"]
+        discord_user_id = _coerce_optional_int(auth.get("discord_user_id")) or 0
+        username = str(auth.get("username") or "Continental user")
+        ok, message = await trigger_lockdown_action(guild, discord_user_id, username, locked)
+        if not ok:
+            return web.json_response({"error": message or "Lockdown action failed."}, status=400)
+
+        license_state = current_license_state()
+        detail = build_guild_detail(
+            guild,
+            get_guild_config(guild.id),
+            guard_runtime_stats=guard_runtime_stats,
+            reminders=reminders,
+            modlog=modlog,
+            vote_store=vote_store,
+            parse_datetime_utc=parse_datetime_utc,
+            normalize_guard_settings=normalize_guard_settings,
+        )
+        detail["authorization"] = build_guild_authorization(guild.id, license_state)
+        detail["license"] = license_state
+        return web.json_response({"ok": True, "message": message, "detail": detail})
+
     app.router.add_get("/", landing_index)
     app.router.add_get("/styles.css", landing_styles)
     app.router.add_get("/script.js", landing_script)
@@ -1035,6 +1086,7 @@ def create_control_center_app(
     app.router.add_get(f"{CONTROL_CENTER_API_PATH}/guilds", guild_list)
     app.router.add_get(f"{CONTROL_CENTER_API_PATH}/guilds/{{guild_id}}", guild_detail)
     app.router.add_put(f"{CONTROL_CENTER_API_PATH}/guilds/{{guild_id}}", update_guild)
+    app.router.add_post(f"{CONTROL_CENTER_API_PATH}/guilds/{{guild_id}}/lockdown", update_lockdown)
     app.router.add_static("/Images/", landing_root / "Images", show_index=False)
     app.router.add_static(CONTROL_CENTER_STATIC_PATH + "/", static_root, show_index=False)
     return app

@@ -1449,6 +1449,51 @@ async def can_user_manage_control_center_guild(guild: discord.Guild, user_id: in
     return has_mod_access(member, guild_cfg)
 
 
+async def apply_guild_lockdown(
+    guild: discord.Guild,
+    guild_cfg: dict[str, Any],
+    *,
+    locked: bool,
+    audit_reason: str | None = None,
+) -> tuple[bool, str, discord.Role | None, int, int]:
+    target_role_id = guild_cfg.get("lockdown_role_id")
+    target_role = resolve_role(guild, target_role_id) if target_role_id else resolve_default_role(guild)
+    if target_role is None:
+        return (
+            False,
+            "⚠️ Configured lockdown role no longer exists. Set it again with `/setlockdownrole`.",
+            None,
+            0,
+            0,
+        )
+
+    updated = 0
+    failed = 0
+    for channel in guild.text_channels:
+        overwrite = channel.overwrites_for(target_role)
+        overwrite.send_messages = not locked
+        try:
+            if audit_reason:
+                await channel.set_permissions(target_role, overwrite=overwrite, reason=audit_reason[:512])
+            else:
+                await channel.set_permissions(target_role, overwrite=overwrite)
+            updated += 1
+        except Exception:
+            failed += 1
+
+    if updated == 0 and failed > 0:
+        return False, "⚠️ I could not update channel permissions for lockdown.", target_role, updated, failed
+
+    state_text = "enabled" if locked else "lifted"
+    return (
+        True,
+        f"Lockdown {state_text} for role `{target_role.name}` ({updated} updated, {failed} failed).",
+        target_role,
+        updated,
+        failed,
+    )
+
+
 async def set_lockdown_state(ctx: commands.Context, locked: bool) -> None:
     await safe_ctx_defer(ctx)
 
@@ -1457,22 +1502,10 @@ async def set_lockdown_state(ctx: commands.Context, locked: bool) -> None:
         return
 
     guild, guild_cfg = result
-    target_role_id = guild_cfg.get("lockdown_role_id")
-    target_role = resolve_role(guild, target_role_id) if target_role_id else resolve_default_role(guild)
-    if target_role is None:
-        await safe_ctx_send(ctx, "⚠️ Configured lockdown role no longer exists. Set it again with `/setlockdownrole`.")
+    ok, summary, target_role, updated, failed = await apply_guild_lockdown(guild, guild_cfg, locked=locked)
+    if not ok or target_role is None:
+        await safe_ctx_send(ctx, summary)
         return
-
-    updated = 0
-    failed = 0
-    for channel in guild.text_channels:
-        overwrite = channel.overwrites_for(target_role)
-        overwrite.send_messages = not locked
-        try:
-            await channel.set_permissions(target_role, overwrite=overwrite)
-            updated += 1
-        except Exception:
-            failed += 1
 
     title = "EMERGENCY LOCKDOWN" if locked else "LOCKDOWN LIFTED"
     description = (
@@ -1499,6 +1532,41 @@ async def set_lockdown_state(ctx: commands.Context, locked: bool) -> None:
         f"📘 Case `{case_id}` {ctx.author.mention} ran `{ 'lockdown' if locked else 'unlock' }` "
         f"for role `{target_role.name}`.",
     )
+
+
+async def trigger_control_center_lockdown(
+    guild: discord.Guild,
+    discord_user_id: int,
+    username: str,
+    locked: bool,
+) -> tuple[bool, str]:
+    guild_cfg = get_guild_config(guild.id)
+    actor_name = (username or "Continental user").strip() or "Continental user"
+    action_name = "lockdown" if locked else "unlock"
+    audit_reason = f"Control Center {action_name} by {actor_name} ({discord_user_id})"
+    ok, summary, target_role, updated, failed = await apply_guild_lockdown(
+        guild,
+        guild_cfg,
+        locked=locked,
+        audit_reason=audit_reason,
+    )
+    if not ok or target_role is None:
+        return False, summary
+
+    case_id = log_moderation_action(
+        guild_id=guild.id,
+        action=action_name,
+        actor_id=discord_user_id,
+        reason=f"Changed communication state for role {target_role.name} via Control Center",
+        details=f"updated={updated},failed={failed},role_id={target_role.id}",
+        undoable=False,
+    )
+    actor_label = f"{actor_name} ({discord_user_id})" if discord_user_id > 0 else actor_name
+    await send_ops_log(
+        guild,
+        f"📘 Case `{case_id}` {actor_label} ran `{action_name}` for role `{target_role.name}` via Control Center.",
+    )
+    return True, summary
 
 
 async def dispatch_due_reminders() -> None:
@@ -1945,6 +2013,7 @@ async def on_ready():
                 site_port=VANGUARD_CONTROL_CENTER_PORT,
                 static_dir=CONTROL_CENTER_STATIC_DIR,
                 landing_dir=LANDING_SITE_DIR,
+                trigger_lockdown_action=trigger_control_center_lockdown,
             )
             control_center_runner = await start_control_center_site(
                 control_center_app,

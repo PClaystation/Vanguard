@@ -1028,6 +1028,22 @@ h3 {
   letter-spacing: 0.8px;
 }
 
+.footer-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  color: rgba(255, 227, 227, 0.72);
+  font-size: 0.68rem;
+  font-weight: 900;
+}
+
+.footer-brand img {
+  width: min(170px, 34vw);
+  height: auto;
+  opacity: 0.9;
+}
+
 .footer-links {
   display: flex;
   align-items: center;

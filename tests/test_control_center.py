@@ -393,6 +393,70 @@ def test_control_center_update_surfaces_persistence_failures():
     asyncio.run(scenario())
 
 
+def test_control_center_lockdown_action_uses_authenticated_actor_context():
+    async def scenario():
+        guild = FakeGuild()
+        bot = FakeBot([guild])
+        guild_cfg = default_guild_config()
+        calls: list[tuple[int, str, bool]] = []
+
+        async def trigger_lockdown_action(target_guild, discord_user_id: int, username: str, locked: bool):
+            assert target_guild is guild
+            calls.append((discord_user_id, username, locked))
+            return True, "Lockdown enabled for role `Member` (3 updated, 0 failed)."
+
+        app = create_control_center_app(
+            bot=bot,
+            get_guild_config=lambda guild_id: guild_cfg,
+            save_settings=lambda: True,
+            normalize_guard_settings=normalize_guard_settings,
+            resolve_guard_preset_name=resolve_guard_preset_name,
+            apply_guard_preset=apply_guard_preset,
+            guard_runtime_stats={},
+            reminders=[],
+            modlog={},
+            vote_store={},
+            parse_datetime_utc=parse_datetime,
+            http_request=lambda *args, **kwargs: None,
+            can_access_guild=_allow_access,
+            fetch_continental_profile=_fetch_continental_profile,
+            get_license_state=lambda: None,
+            continental_login_url="https://continental.example/login",
+            continental_dashboard_url="https://continental.example/dashboard",
+            public_url="",
+            site_host="127.0.0.1",
+            site_port=8080,
+            static_dir="control_center",
+            landing_dir="website",
+            trigger_lockdown_action=trigger_lockdown_action,
+        )
+
+        server = TestServer(app)
+        client = TestClient(server)
+        await client.start_server()
+        try:
+            auth_response = await client.post(
+                "/control/api/session/exchange",
+                json={"accessToken": "token"},
+            )
+            assert auth_response.status == 200
+
+            action_response = await client.post(
+                "/control/api/guilds/123/lockdown",
+                json={"locked": True},
+            )
+            assert action_response.status == 200
+            payload = await action_response.json()
+            assert payload["ok"] is True
+            assert payload["message"] == "Lockdown enabled for role `Member` (3 updated, 0 failed)."
+            assert payload["detail"]["id"] == "123"
+            assert calls == [(555, "Linked User", True)]
+        finally:
+            await client.close()
+
+    asyncio.run(scenario())
+
+
 async def _allow_access(guild, user_id: int) -> bool:
     return guild.id == 123 and user_id == 555
 

@@ -95,4 +95,4 @@ These Terms are governed by the laws of `Sweden`, without regard to conflict of 
 
 For legal/support inquiries:
 
-- Email: `Charlemagne@continental-hub.com`
+- Contact: `https://contact.continental-hub.com`

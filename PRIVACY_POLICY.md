@@ -80,7 +80,7 @@ Depending on your location, you may have rights to request access, correction, d
 
 To request deletion or privacy-related action, contact us:
 
-- Contact email: `Charlemagne@continental-hub.com`
+- Contact: `https://contact.continental-hub.com`
 - Subject line: `Vanguard Bot Privacy Request`
 - Include: your Discord user ID, server ID (if relevant), and request details.
 
@@ -102,4 +102,4 @@ We may update this policy periodically. The "Last updated" date reflects the lat
 
 For privacy questions:
 
-- Email: `Charlemagne@continental-hub.com`
+- Contact: `https://contact.continental-hub.com`

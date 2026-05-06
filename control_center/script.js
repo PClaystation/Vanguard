@@ -209,6 +209,9 @@ const licenseBadge = document.querySelector("#license-badge");
 const licenseDetail = document.querySelector("#license-detail");
 const guildAccessBadge = document.querySelector("#guild-access-badge");
 const dashboardNotice = document.querySelector("#dashboard-notice");
+const lockdownEnableButton = document.querySelector("#lockdown-enable");
+const lockdownDisableButton = document.querySelector("#lockdown-disable");
+const lockdownTargetDetail = document.querySelector("#lockdown-target-detail");
 
 bootstrap();
 
@@ -264,6 +267,14 @@ logoutButton.addEventListener("click", async () => {
 
 refreshButton.addEventListener("click", async () => {
   await loadGuilds();
+});
+
+lockdownEnableButton.addEventListener("click", async () => {
+  await runLockdownAction(true);
+});
+
+lockdownDisableButton.addEventListener("click", async () => {
+  await runLockdownAction(false);
 });
 
 resetButton.addEventListener("click", () => {
@@ -501,6 +512,7 @@ function renderDetail(detail) {
     renderIntegrationSummary();
   }
   renderDashboardNotice(detail);
+  renderLockdownTarget(detail);
 
   populateSelect("welcome-channel", detail.channels, "Channel not set");
   populateSelect("ops-channel", detail.channels, "Channel not set");
@@ -509,6 +521,36 @@ function renderDetail(detail) {
   populateSelect("lockdown-role", detail.roles, "Use @everyone");
   populateModRoles(detail.roles, detail.settings.mod_role_ids || []);
   fillForm(detail);
+}
+
+async function runLockdownAction(locked) {
+  if (!state.selectedGuildId) {
+    return;
+  }
+
+  setLockdownActionState(true);
+  try {
+    const payload = await api(`${API_BASE}/guilds/${state.selectedGuildId}/lockdown`, {
+      method: "POST",
+      body: JSON.stringify({ locked }),
+    });
+    const detail = normalizeGuildDetail(payload.detail);
+    state.detail = detail;
+    syncGuildSummary(detail);
+    renderGuildList();
+    renderDetail(detail);
+    showToast(
+      payload.message || (locked ? "Server lockdown triggered." : "Server lockdown lifted."),
+      "success"
+    );
+  } catch (error) {
+    if (/Unauthorized|HTTP 401/i.test(String(error.message || ""))) {
+      await loadSession();
+    }
+    showToast(error.message || "Failed to update server lockdown.", "error");
+  } finally {
+    setLockdownActionState(false);
+  }
 }
 
 function fillForm(detail) {
@@ -573,6 +615,17 @@ function populateModRoles(roles, selectedRoleIds) {
     input.checked = selected.has(String(role.id));
     container.appendChild(label);
   }
+}
+
+function renderLockdownTarget(detail) {
+  if (!lockdownTargetDetail) {
+    return;
+  }
+  const lockdownRoleId = detail.settings.lockdown_role_id;
+  const targetRole = detail.roles.find((role) => String(role.id) === String(lockdownRoleId));
+  const targetLabel = targetRole ? `@${targetRole.name}` : "@everyone";
+  lockdownTargetDetail.textContent =
+    `Trigger a live server lockdown for ${targetLabel}. This updates channel send permissions immediately.`;
 }
 
 function buildPayload() {
@@ -977,6 +1030,15 @@ function renderIntegrationSummary() {
   }
   if (licenseDetail) {
     licenseDetail.textContent = license.detail;
+  }
+}
+
+function setLockdownActionState(isBusy) {
+  if (lockdownEnableButton) {
+    lockdownEnableButton.disabled = isBusy;
+  }
+  if (lockdownDisableButton) {
+    lockdownDisableButton.disabled = isBusy;
   }
 }
 
