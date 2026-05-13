@@ -1020,7 +1020,8 @@ h3 {
   padding: 52px 0 34px;
   display: flex;
   justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
+  flex-wrap: wrap;
   gap: 18px;
   color: #ffe3e3;
   font-size: 0.78rem;
@@ -1033,21 +1034,31 @@ h3 {
   align-items: center;
   gap: 10px;
   min-width: 0;
+  flex: 0 1 260px;
   color: rgba(255, 227, 227, 0.72);
   font-size: 0.68rem;
   font-weight: 900;
 }
 
 .footer-brand img {
-  width: min(170px, 34vw);
+  width: min(154px, 40vw);
   height: auto;
   opacity: 0.9;
+}
+
+.footer > p {
+  flex: 1 1 220px;
+  margin: 0;
+  line-height: 1.6;
 }
 
 .footer-links {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 10px;
+  max-width: 100%;
 }
 
 .footer-links a {
@@ -1172,6 +1183,6 @@ h3 {
   }
 
   .footer-links {
-    flex-wrap: wrap;
+    justify-content: flex-start;
   }
 }
